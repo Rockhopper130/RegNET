@@ -1,35 +1,14 @@
 """
-Loss Functions for Seg-only Registration
+Loss functions for seg-only registration.
 
-Composite (sum of weighted terms; weights live in config.yaml -> loss):
+The training objective (SegRegistrationLoss) is voxel multi-class Dice on the
+warped template seg + cross entropy + bending energy on the FFD control lattice
++ affine regularisation. The mesh is not in the loss: the FFD clamp keeps the
+warp diffeomorphic and the template is genus-0, so topology needs no penalty.
 
-    Segmentation alignment
-      - dice (excludes background channel 0)
-      - cross_entropy (vs argmax of one-hot target)
-
-    Geometric regularization
-      - bending energy (second-order smoothness)
-      - Jacobian determinant (linear-neg + top-K + pre-fold barrier;
-        bulk-mean ReLU(-det) was found insufficient to suppress fold voxels)
-      - displacement magnitude
-
-    Lambda-based adaptive regularization (linear-λ + anatomy prior)
-      - lambda_weighted_smoothness:  mean( λ_avg · |∇φ|² )       [linear in λ]
-      - lambda_prior:                anatomy-aware Gaussian pulling λ toward
-                                     (1 - dilated_boundary(sample_seg))
-
-    Affine regularization (only active when affine_matrix is not None)
-      - affine_reg:   MSE against the 3x4 identity affine
-      - affine_ortho: MSE of RᵀR vs I on the rotation submatrix
-
-Notes:
-- The lambda formulations were rewritten after the test_1 baseline collapsed
-  to a constant λ ≈ 0.5 over 70 epochs (see dump/2026-05-28_pre-R1/). The
-  linear-λ smoothness gives the head a data-dependent gradient; the
-  anatomy-aware prior gives it a meaningful target. Together they are the
-  minimum change required to break collapse — neither alone is sufficient.
-- The Jacobian formulation is the current top-K + pre-fold one, calibrated
-  with config weight 0.5 (not the original 0.01 on plain mean(ReLU(-det))).
+The other functions here (jacobian_det, displacement_loss, the lambda terms,
+affine_orthogonality_loss, compute_dice_score) are kept for inference and the
+diagnostic scripts. jacobian_det is used to log folding %, never optimised.
 """
 
 import torch
@@ -41,12 +20,16 @@ import torch.nn.functional as F
 # Segmentation Alignment Losses
 # =============================================================================
 
-def dice_loss(y_pred, y_true, smooth=1e-5):
+def dice_loss(y_pred, y_true, smooth=1e-5, class_weights=None):
     """
     Dice loss — foreground classes only (skips class 0 = background).
 
     Background dominates the volume; including it inflates dice and washes
     out the gradient signal for the tissues we actually care about.
+
+    class_weights: optional length-(C-1) weights over the foreground classes.
+        When given, per-class Dice is combined as a weighted mean (e.g. to focus
+        on white matter). None reproduces the equal-weight mean.
     """
     vol_axes = list(range(2, y_pred.ndim))
 
@@ -56,13 +39,19 @@ def dice_loss(y_pred, y_true, smooth=1e-5):
     intersection = (y_pred * y_true).sum(dim=vol_axes)
     union = y_pred.sum(dim=vol_axes) + y_true.sum(dim=vol_axes)
 
-    dice_score = (2. * intersection + smooth) / (union + smooth)
-    return 1 - dice_score.mean()
+    dice_score = (2. * intersection + smooth) / (union + smooth)   # (B, C-1)
+    if class_weights is None:
+        return 1 - dice_score.mean()
+    w = class_weights.to(dice_score.dtype)
+    per_sample = (dice_score * w).sum(dim=1) / w.sum()
+    return 1 - per_sample.mean()
 
 
-def cross_entropy_loss(y_pred, y_true):
-    """Cross entropy against the argmax of a one-hot target."""
-    return F.cross_entropy(y_pred, y_true.argmax(dim=1))
+def cross_entropy_loss(y_pred, y_true, class_weights=None):
+    """Cross entropy against the argmax of a one-hot target. class_weights is an
+    optional length-C per-class weight (incl. background), so CE can focus on the
+    same structure as a weighted Dice term."""
+    return F.cross_entropy(y_pred, y_true.argmax(dim=1), weight=class_weights)
 
 
 # =============================================================================
@@ -152,6 +141,17 @@ def jacobian_det_loss(flow):
 def displacement_loss(flow):
     """Penalises voxels moving far from origin (mean of squared flow)."""
     return torch.mean(flow ** 2)
+
+
+# =============================================================================
+# FFD control-lattice regularizer
+# =============================================================================
+
+def bspline_bending_energy(cps_list):
+    """Bending energy on the control lattice(s), summed over the FFD cascade
+    stages. Differences are per-lattice-step, so the effective strength scales
+    with cp_spacing; re-tune the bending weight if cp_spacing changes."""
+    return sum(bending_energy_loss(cps) for cps in cps_list)
 
 
 # =============================================================================
@@ -276,51 +276,55 @@ def affine_orthogonality_loss(affine_matrix):
 
 class SegRegistrationLoss(nn.Module):
     """
-    Composite loss for seg-only registration.
+    Voxel multi-class Dice registration loss for the bounded B-spline FFD.
 
-    Terms (all summed with weights from `weights`):
-      - dice, cross_entropy
-      - bending, jacobian, displacement
-      - lambda_smoothness, lambda_prior
-      - affine_reg, affine_ortho  (active only when affine_matrix is not None)
+    Terms (summed with weights from config.loss; missing keys -> 0):
+      - dice          : foreground-only Dice of warped_seg vs target_seg
+      - cross_entropy : CE of warped_seg vs argmax(target_seg)
+      - bending       : B-spline bending energy on the FFD control lattice
+      - affine_reg    : affine toward identity (only when affine is enabled)
 
-    `weights` is required — config.yaml is the single source of truth. Any
-    key missing from `weights` is treated as 0.0 at sum time.
+    There is no Jacobian or mesh term: the FFD clamp keeps the warp diffeomorphic
+    and the template mesh is genus-0, so the mesh is pushed out of the field
+    afterwards rather than optimised. weights is required.
     """
-    def __init__(self, weights):
+    def __init__(self, weights, class_weights=None):
         super().__init__()
         if weights is None:
             raise ValueError(
-                "SegRegistrationLoss requires `weights` (typically config.loss). "
-                "Default weights were removed because they drift from config.yaml "
-                "and silently caused regressions when config loading was skipped."
+                "SegRegistrationLoss requires `weights` (config.loss). "
+                "Default weights were removed because they drift from config.yaml."
             )
         self.weights = weights
+        # Per-class weighting (incl. background) shared by Dice and CE; registered
+        # as a buffer so .to(device) carries it. None -> equal weight.
+        if class_weights is not None:
+            self.register_buffer('class_weights',
+                                 torch.as_tensor(class_weights, dtype=torch.float32))
+        else:
+            self.class_weights = None
 
-    def forward(self, warped_seg, sample_seg, final_flow, lambda_map,
+    def forward(self, warped_seg, target_seg, cps_list,
                 affine_matrix=None, return_components=False):
+        """
+        Args:
+            warped_seg:    (B, C, D, H, W) bilinearly-warped template seg (soft).
+            target_seg:    (B, C, D, H, W) one-hot supervision target.
+            cps_list:      list of clamped FFD control grids (for bending energy).
+            affine_matrix: (1, 3, 4) or None.
+        """
+        cw = self.class_weights
         loss_dict = {}
+        loss_dict['dice'] = dice_loss(
+            warped_seg, target_seg, class_weights=None if cw is None else cw[1:])
+        loss_dict['cross_entropy'] = cross_entropy_loss(
+            warped_seg, target_seg, class_weights=cw)
+        loss_dict['bending'] = bspline_bending_energy(cps_list)
 
-        # Segmentation alignment
-        loss_dict['dice'] = dice_loss(warped_seg, sample_seg)
-        loss_dict['cross_entropy'] = cross_entropy_loss(warped_seg, sample_seg)
-
-        # Geometric regularization
-        loss_dict['bending'] = bending_energy_loss(final_flow)
-        loss_dict['jacobian'] = jacobian_det_loss(final_flow)
-        loss_dict['displacement'] = displacement_loss(final_flow)
-
-        # Lambda-adaptive (linear-λ smoothness + anatomy prior)
-        loss_dict['lambda_smoothness'] = lambda_weighted_smoothness(final_flow, lambda_map)
-        loss_dict['lambda_prior'] = lambda_prior_loss(lambda_map, sample_seg)
-
-        # Affine
         if affine_matrix is not None:
             loss_dict['affine_reg'] = affine_regularization_loss(affine_matrix)
-            loss_dict['affine_ortho'] = affine_orthogonality_loss(affine_matrix)
         else:
-            loss_dict['affine_reg'] = torch.tensor(0.0, device=final_flow.device)
-            loss_dict['affine_ortho'] = torch.tensor(0.0, device=final_flow.device)
+            loss_dict['affine_reg'] = torch.zeros((), device=warped_seg.device)
 
         total_loss = sum(self.weights.get(k, 0.0) * loss_dict[k] for k in loss_dict)
 

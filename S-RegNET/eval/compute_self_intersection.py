@@ -26,10 +26,14 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import argparse
+import os
+import sys
 from pathlib import Path
 from tqdm import tqdm
 import json
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model import SegRegistrationNet, SpatialTransformer
 from losses import compute_dice_score, jacobian_det_loss
@@ -174,7 +178,14 @@ def main():
 
     # Model + STN
     print("\nLoading model...")
-    model = SegRegistrationNet(seg_channels=seg_channels, use_affine=use_affine).to(device)
+    tcfg = cfg.get('transform', {})
+    model = SegRegistrationNet(
+        seg_channels=seg_channels, use_affine=use_affine,
+        cp_spacing=tcfg.get('cp_spacing', 8),
+        n_stages=tcfg.get('n_stages', 1),
+        injectivity_k=tcfg.get('injectivity_k', 0.40),
+        target_size=target_size,
+    ).to(device)
     stn = SpatialTransformer(size=target_size, device=device).to(device)
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -208,9 +219,13 @@ def main():
         for idx in tqdm(range(num_samples), desc="Processing"):
             data = dataset[idx]
             template_seg = data['template_seg'].unsqueeze(0).to(device)
-            sample_seg = data['sample_seg'].unsqueeze(0).to(device)
+            # Feed the GT one-hot as the model's 2nd input.
+            sample_seg = data['gt_seg'].unsqueeze(0).to(device)
 
-            final_flow, lambda_map, affine_matrix = model(template_seg, sample_seg)
+            # Dense field from the clamped control points; the folding stats below
+            # are computed on it.
+            cps_list, affine_matrix = model(template_seg, sample_seg)
+            final_flow = model.dense_flow_from_cps(cps_list)
             warped_seg = _warp_template(template_seg, final_flow, affine_matrix, stn)
 
             dice_per_class, mean_dice = compute_dice_score(
@@ -229,7 +244,7 @@ def main():
                 'jacobian_det_loss_training': jac_train_loss,
             })
 
-            del template_seg, sample_seg, final_flow, lambda_map, affine_matrix
+            del template_seg, sample_seg, final_flow, cps_list, affine_matrix
             del warped_seg, flow_cpu
             if device.type == 'cuda':
                 torch.cuda.empty_cache()

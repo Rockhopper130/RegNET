@@ -25,6 +25,8 @@ warp of a clean template cannot introduce.
 
 from pathlib import Path
 import json
+import os
+import sys
 
 import numpy as np
 import torch
@@ -34,6 +36,8 @@ from scipy.ndimage import label as ndi_label
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from inference import (
     setup_inference, load_seg_input,
@@ -48,10 +52,10 @@ from losses import compute_dice_score
 # =============================================================================
 
 # training_seg_acm/20260528_115247
-CHECKPOINT = "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/training_seg_acm/20260528_115247/checkpoints/best_model.pth"
+CHECKPOINT = "/shared/scratch/0/home/v_nishchay_nilabh/training_results/oasis_synthseg_experiment/20260619_154843/checkpoints/best_model.pth"
 
 OASIS_SCANS_DIR = "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans"
-SYNTHSEG_DIR    = "/shared/home/v_nishchay_nilabh/shared_scratch/oasis_data/anna_data/oasis_dataset/oasis_synthseg_output/output"
+SYNTHSEG_DIR    = "/shared/home/v_nishchay_nilabh/shared_scratch/oasis_data/oasis_synthseg/oasis_data_synthseg_version1/"
 
 # Outputs land next to the checkpoint, under .../<TIMESTAMP>/compare_synthseg_vs_gt_results/
 OUTPUT_DIR = Path(CHECKPOINT).parent.parent / "compare_synthseg_vs_gt_results"
@@ -59,7 +63,7 @@ OUTPUT_DIR = Path(CHECKPOINT).parent.parent / "compare_synthseg_vs_gt_results"
 # Subject IDs come from val.txt (one absolute path to seg4_onehot.npy per line,
 # in shuffled order — preserved here). Parse the subject from the path.
 VAL_TXT = Path(__file__).parent / "val.txt"
-DEVICE = "cuda:5"
+DEVICE = "cuda:1"
 USE_AFFINE = False    # must match the checkpoint
 
 
@@ -166,7 +170,7 @@ def main():
     skipped = []
 
     for idx in indices:
-        synthseg_path = f"{SYNTHSEG_DIR}/OASIS_OAS1_{idx}_MR1/orig_synthseg.nii.gz"
+        synthseg_path = f"{SYNTHSEG_DIR}/OASIS_OAS1_{idx}_MR1/norm_synthseg.nii.gz"
         gt_path       = f"{OASIS_SCANS_DIR}/OASIS_OAS1_{idx}_MR1/seg4_onehot.npy"
 
         if not (Path(synthseg_path).exists() and Path(gt_path).exists()):
@@ -187,8 +191,12 @@ def main():
         ss_components = per_class_components(synthseg, num_classes)
         gt_components = per_class_components(gt,       num_classes)
 
-        # Model: register template → synthseg, then score warped vs GT.
-        final_flow, lambda_map, affine_matrix = model(template_seg, synthseg_b)
+        # Register template -> synthseg, then score warped vs GT. The STN volume
+        # warp below is the registration; geometric/folding terms on final_flow
+        # stay valid.
+        cps_list, affine_matrix = model(template_seg, synthseg_b)
+        final_flow = model.dense_flow_from_cps(cps_list)
+        lambda_map = None
         if affine_matrix is not None:
             affine_grid = F.affine_grid(affine_matrix, template_seg.size(),
                                         align_corners=False)

@@ -44,6 +44,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
 from git_provenance import write_git_sha
+from label_mapping import LABEL_MAPPING, remap_to_5class
 from model import SegRegistrationNet, SpatialTransformer
 from losses import (
     dice_loss, cross_entropy_loss,
@@ -65,19 +66,6 @@ def load_config(config_path=None):
         return yaml.safe_load(f)
 
 
-# FreeSurfer label → 5-class remapping (Background, Cortex, Subcortical GM,
-# White Matter, CSF). Used when --input_seg is a .nii.gz integer-label
-# volume; if the user passes a pre-converted .npy one-hot, this is skipped.
-LABEL_MAPPING = {
-    0: 0, 24: 0,
-    3: 1, 42: 1,
-    10: 2, 49: 2, 11: 3, 50: 2, 12: 2, 51: 2, 13: 2, 52: 2,
-    17: 2, 53: 2, 18: 2, 54: 2, 26: 2, 58: 2, 60: 2, 8: 2, 47: 2,
-    2: 3, 41: 3, 7: 3, 46: 3, 16: 3, 28: 3,
-    4: 4, 43: 4, 5: 4, 44: 4, 14: 4, 15: 4,
-}
-
-
 def load_seg_input(path, target_size, num_classes=5):
     """
     Load a sample seg from disk. Supports:
@@ -97,9 +85,7 @@ def load_seg_input(path, target_size, num_classes=5):
     else:
         img = nib.load(path)
         data = img.get_fdata().astype(np.int64)
-        remapped = np.zeros_like(data)
-        for src, dst in LABEL_MAPPING.items():
-            remapped[data == src] = dst
+        remapped = remap_to_5class(data)
         seg_tensor = torch.tensor(remapped)
         seg = F.one_hot(seg_tensor.long(), num_classes).permute(3, 0, 1, 2).float()
         nifti_affine = img.affine
@@ -352,7 +338,14 @@ def setup_inference(checkpoint_path, config_path=None, device='cuda:0',
 
     if verbose:
         print("Loading model...")
-    model = SegRegistrationNet(seg_channels=num_classes, use_affine=use_affine).to(dev)
+    tcfg = cfg.get('transform', {})
+    model = SegRegistrationNet(
+        seg_channels=num_classes, use_affine=use_affine,
+        cp_spacing=tcfg.get('cp_spacing', 8),
+        n_stages=tcfg.get('n_stages', 1),
+        injectivity_k=tcfg.get('injectivity_k', 0.40),
+        target_size=target_size,
+    ).to(dev)
     stn = SpatialTransformer(size=target_size, device=dev).to(dev)
 
     ckpt = torch.load(checkpoint_path, map_location=dev, weights_only=False)
@@ -396,8 +389,12 @@ def run_inference_on_sample(ctx, input_seg_path, output_dir,
     sample_seg, nifti_affine = load_seg_input(input_seg_path, target_size, num_classes)
     sample_seg = sample_seg.unsqueeze(0).to(device)
 
-    # Forward + affine-then-flow warp replay (critical invariant; matches train.py:_warp_template)
-    final_flow, lambda_map, affine_matrix = model(template_seg, sample_seg)
+    # Forward pass -> clamped control points, then the dense field. The STN
+    # volume warp below is the registration (warped_seg matches training); the
+    # genus-0 mesh is pushed via the field's numerical inverse elsewhere.
+    cps_list, affine_matrix = model(template_seg, sample_seg)
+    final_flow = model.dense_flow_from_cps(cps_list)
+    lambda_map = None
     if affine_matrix is not None:
         affine_grid = F.affine_grid(affine_matrix, template_seg.size(), align_corners=False)
         aligned_seg = F.grid_sample(template_seg, affine_grid, mode='bilinear',
