@@ -22,11 +22,29 @@ data:
   # File naming inside each subject directory.
   seg_filename: "seg4_onehot.npy"
 
+  # SynthSeg one-hot (produced by convert_synthseg_one_hot.py), stored next
+  # to seg_filename in each subject dir.
+  synthseg_filename: "synthseg_onehot_v1.npy"
+
+  # Genus-0 WM template mesh (.npz: verts_norm, faces, n_lh) built by
+  # wm_template.py from the template subject's FreeSurfer lh/rh.white.
+  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/template_wm_mesh.npz"
+
+# -----------------------------------------------------------------------------
+# Experiment routing
+# -----------------------------------------------------------------------------
+# input_source picks the model's 2nd input; supervision_target picks the Dice/CE
+# target. The deployable run is synthseg-conditioned, GT-supervised
+# (input_source: synthseg, supervision_target: gt); gt/gt is the sanity check.
+experiment:
+  input_source: gt            # synthseg | gt   — model's 2nd input
+  supervision_target: gt      # gt | synthseg   — Dice/CE target
+
 # -----------------------------------------------------------------------------
 # Output Configuration
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/training_seg_acm"
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/oasis_invertible_deform"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -40,10 +58,25 @@ model:
   seg_channels: 5
 
 # -----------------------------------------------------------------------------
+# Transform — bounded forward cubic-B-spline FFD
+# -----------------------------------------------------------------------------
+# The model predicts clamped control-point displacements on a cp_spacing
+# lattice; the clamp (delta_max = injectivity_k * cp_spacing * 2/N) keeps each
+# stage below the Choi-Lee injectivity bound, so the warp stays a diffeomorphism.
+# n_stages composed stages extend capture range. cp_spacing must be one of
+# {2, 4, 8} (it selects the U-Net decoder feature matching the control lattice).
+transform:
+  cp_spacing: 4        # control-lattice spacing in voxels (4 -> 32^3 lattice)
+  n_stages: 3          # composed FFD stages (1 = single FFD)
+  injectivity_k: 0.40  # fraction of the 3D Choi-Lee bound; keep <= 0.40 for a
+                       # guaranteed diffeomorphism. k is the safety knob; raise
+                       # cp_spacing / n_stages for capacity, not k.
+
+# -----------------------------------------------------------------------------
 # Affine Pre-alignment
 # -----------------------------------------------------------------------------
 affine:
-  enabled: false
+  enabled: true
   regularization_weight: 0.01
   orthogonality_weight: 0.0
 
@@ -52,7 +85,7 @@ affine:
 # -----------------------------------------------------------------------------
 training:
   batch_size: 1
-  num_epochs: 150
+  num_epochs: 60
   num_workers: 0
   pin_memory: true
 
@@ -71,31 +104,21 @@ training:
 # -----------------------------------------------------------------------------
 # Loss Function Weights
 # -----------------------------------------------------------------------------
-# Jacobian weight is 0.5 (not the original 0.01) because the loss uses the
-# normalised top-K + pre-fold formulation, which has a different output
-# scale than the old mean(ReLU(-det)).
-#
-# Plain first-order smoothness is intentionally absent — lambda_smoothness
-# is the active first-order smoothness regularizer here.
+# Voxel-Dice objective (SegRegistrationLoss). There is no Jacobian loss term:
+# the diffeomorphism guarantee comes from the FFD clamp, and folding is logged
+# as a diagnostic instead. bending acts on the control lattice, so re-tune its
+# weight if cp_spacing changes.
 loss:
-  # Segmentation alignment
-  dice:          0.8
-  cross_entropy: 0.2
+  dice:          1.0    # foreground multi-class Dice of warped seg vs target
+  cross_entropy: 0.2    # CE vs argmax(target)
+  bending:       0.01   # B-spline bending energy on the FFD control lattice
+  affine_reg:    0.01   # affine toward identity (only when affine.enabled: true)
 
-  # Geometric regularization
-  bending:       0.1           # second-order smoothness
-  jacobian:      0.5           # anti-folding; linear-neg + top-K + pre-fold barrier
-  displacement:  0.01          # penalises large per-voxel displacements
-
-  # Lambda-based adaptive regularization
-  #   smoothness: mean( λ_avg · |∇φ|² )            [linear in λ]
-  #   prior:      mean( (λ - target)² / (2σ²) )    with target = 1 - dilated_boundary(sample_seg), σ=0.3
-  lambda_smoothness: 0.1
-  lambda_prior:      0.05
-
-  # Affine regularization (only active when affine.enabled: true)
-  affine_reg:    0.01
-  affine_ortho:  0.0
+  # Per-class weight [bg, cortex, subGM, WM, CSF] shared by Dice and CE. WM is
+  # the target structure, so it carries most of the weight; neighbours keep a
+  # small weight to keep the warp anatomically coherent. Delete this line for
+  # equal weighting. Checkpoints select on WM Dice.
+  class_weights: [0.1, 0.1, 0.1, 1.0, 0.1]
 
 # -----------------------------------------------------------------------------
 # Reproducibility
