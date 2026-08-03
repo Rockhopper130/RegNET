@@ -152,12 +152,12 @@ def jacobian_det_loss(flow):
     topk_neg, _ = torch.topk(neg.flatten(), k)
     neg_topk = topk_neg.sum()
 
-    # Strict pre-fold barrier threshold tightened to 0.15 to guarantee diffeomorphism
+    # Strict pre-fold barrier threshold tightened to 0.08 to guarantee diffeomorphism
     # Penalizes voxels strongly before they even reach 0 (fold)
-    near_zero = F.relu(0.15 - det_norm) * (det_norm > 0).float()
+    near_zero = F.relu(0.08 - det_norm) * (det_norm > 0).float()
     pre_fold = (near_zero ** 2).mean()
 
-    return neg_linear + 1.0 * neg_topk + 0.5 * pre_fold
+    return neg_linear + 0.5 * neg_topk + 0.5 * pre_fold
 
 
 def displacement_loss(flow):

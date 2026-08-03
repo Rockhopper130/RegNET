@@ -81,11 +81,11 @@ loss:
   # Segmentation alignment
   dice:          0.8
   cross_entropy: 0.2
-  class_weights: [0.1, 1.0, 1.0, 20.0, 1.0]
+  class_weights: [0.1, 1.0, 1.0, 3.0, 1.0]
 
   # Geometric regularization
-  bending:       0.2          # second-order smoothness
-  jacobian:      2.5          # anti-folding; linear-neg + top-K + pre-fold barrier
+  bending:       0.15         # second-order smoothness
+  jacobian:      1.0          # anti-folding; linear-neg + top-K + pre-fold barrier
   displacement:  0.01          # penalises large per-voxel displacements
 
   # Lambda-based adaptive regularization
