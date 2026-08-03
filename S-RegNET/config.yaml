@@ -81,7 +81,7 @@ loss:
   # Segmentation alignment
   dice:          0.8
   cross_entropy: 0.2
-  class_weights: [0.1, 1.0, 1.0, 3.0, 1.0]
+  class_weights: [0.1, 1.0, 1.0, 5.0, 1.0]
 
   # Geometric regularization
   bending:       0.15         # second-order smoothness
