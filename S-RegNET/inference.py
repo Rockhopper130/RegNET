@@ -42,6 +42,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
+from matplotlib.lines import Line2D
 
 from git_provenance import write_git_sha
 from model import SegRegistrationNet, SpatialTransformer
@@ -253,6 +254,58 @@ def plot_comparison(template_seg, sample_seg, warped_seg, save_path):
     fig.suptitle('Seg Registration Comparison', fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def plot_contour_overlay(template_seg, sample_seg, warped_seg, save_path, target_class=3):
+    """
+    Plots the target mask as a filled white region on a black background,
+    with overlaid contours for template, ground truth, and deformed template.
+    target_class=3 corresponds to White Matter in LABEL_MAPPING.
+    """
+    t_labels = template_seg.squeeze().argmax(dim=0).cpu().numpy()
+    s_labels = sample_seg.squeeze().argmax(dim=0).cpu().numpy()
+    w_labels = warped_seg.squeeze().argmax(dim=0).cpu().numpy()
+
+    t_mask = (t_labels == target_class).astype(np.float32)
+    s_mask = (s_labels == target_class).astype(np.float32)
+    w_mask = (w_labels == target_class).astype(np.float32)
+
+    D, H, W = t_mask.shape
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), facecolor='#f5f5f0')
+
+    views = [
+        ('axial (z)',   lambda v: v[D // 2, :, :], D // 2, D),
+        ('coronal (y)', lambda v: v[:, H // 2, :], H // 2, H),
+        ('sagittal (x)', lambda v: v[:, :, W // 2], W // 2, W),
+    ]
+
+    for ax, (view_name, getter, slice_idx, max_idx) in zip(axes, views):
+        ax.set_facecolor('black')
+        bg = getter(s_mask)
+        ax.imshow(bg, cmap='gray', interpolation='none', vmin=0, vmax=1)
+
+        ax.contour(getter(t_mask), levels=[0.5], colors=['#FFC000'], linewidths=1.5)
+        ax.contour(getter(s_mask), levels=[0.5], colors=['#32CD32'], linewidths=1.5)
+        ax.contour(getter(w_mask), levels=[0.5], colors=['#00BFFF'], linewidths=1.5)
+
+        ax.set_title(f'{view_name} @ {slice_idx} / {max_idx-1}')
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    custom_lines = [
+        Line2D([0], [0], color='#FFC000', lw=2),
+        Line2D([0], [0], color='#32CD32', lw=2),
+        Line2D([0], [0], color='#00BFFF', lw=2)
+    ]
+    axes[0].legend(
+        custom_lines,
+        ['template (undeformed)', 'GT WM (FreeSurfer)', 'deformed template'],
+        loc='lower right', facecolor='gray', edgecolor='black', framealpha=0.9
+    )
+
+    plt.subplots_adjust(wspace=0.05)
+    plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
 
 
