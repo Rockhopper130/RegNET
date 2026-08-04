@@ -321,28 +321,14 @@ def tri_tri_cross(A, B):
     return hit
 
 
-def broadphase(cen, rad, tail_q=99.9):
-    """Candidate triangle pairs under the exact bound |c_i - c_j| <= r_i + r_j.
-
-    Querying that bound with one global radius 2*max(rad) makes every triangle
-    pay for the single most stretched one: on a warped cortical surface a few
-    triangles are several times typical size, the query radius follows them, and
-    the candidate count grows with its square until the pair array does not fit
-    in memory. So split — the bulk is queried at a robust radius, the handful
-    above it at their own, and that handful is paired with itself by brute
-    force. Same pairs, bounded cost."""
-    r_typ = float(np.percentile(rad, tail_q))
-    small, big = np.flatnonzero(rad <= r_typ), np.flatnonzero(rad > r_typ)
-    tree = cKDTree(cen[small])
-    out = [small[tree.query_pairs(2 * r_typ, output_type='ndarray')]]
-    for b in big:                                             # big vs bulk
-        k = tree.query_ball_point(cen[b], rad[b] + r_typ)
-        if k:
-            out.append(np.stack([np.full(len(k), b), small[k]], 1))
-    if len(big) > 1:                                          # big vs big
-        ii, jj = np.triu_indices(len(big), 1)
-        out.append(np.stack([big[ii], big[jj]], 1))
-    return np.vstack(out)
+# Broadphase lives in repair_template_mesh (numpy only, no torch) so there is ONE
+# implementation of it. The radius-split KD-tree version that used to be here still
+# made every triangle pay for the query radius of the most stretched one: on a
+# pushed cortical mesh that cost 311M candidates for 954K real narrowphase pairs
+# (99.7% waste, ~5 GB of pair array, which is what made this pass thrash rather
+# than finish). Inserting each triangle into only the cells its own AABB covers
+# needs 72M for the identical result — 4.3x fewer, 1.16 GB, 17s.
+from repair_template_mesh import cell_pairs                      # noqa: E402
 
 
 def self_intersections(v, faces, label='', chunk=500_000):
@@ -355,12 +341,13 @@ def self_intersections(v, faces, label='', chunk=500_000):
     rotated past 90° under shear is a perfectly embedded triangle and shows up
     here as clean — which is the point of measuring it.
 
-    Broadphase is bounding spheres (see broadphase) narrowed by bounding boxes;
-    pairs sharing a vertex are dropped, since neighbours always touch at it."""
+    Broadphase is a uniform grid over triangle AABBs (see cell_pairs) narrowed by
+    the boxes themselves; pairs sharing a vertex are dropped, since neighbours
+    always touch at it."""
     tri = v[faces].astype(np.float64)
     cen, lo, hi = tri.mean(1), tri.min(1), tri.max(1)
     rad = np.linalg.norm(tri - cen[:, None, :], axis=2).max(1)
-    pairs = broadphase(cen, rad)
+    pairs = cell_pairs(lo, hi, 2.0 * float(np.percentile(rad, 99.0)))
     print(f"      [self-int {label}] {len(pairs):,} candidates", end='', flush=True)
 
     hit, n_pairs, n_narrow = np.zeros(len(faces), dtype=bool), 0, 0
@@ -616,7 +603,13 @@ def probe_subject(ctx, verts_t, verts_np, faces, sample_seg, args, out=None, sub
     # warp's; main() scores it once, because the only thing that differs between
     # subjects is the affine, which is linear and so can neither create nor
     # remove a crossing.
-    ship = set() if args.no_self_int else {f'field_s{base_steps}', 'ode'}
+    # Which pushes get the (5) pass. The field push is the transform actually
+    # applied, so it is the one that must be reported; ode is a diagnostic and is
+    # also the rougher mesh, hence the more expensive one to test.
+    want = {x.strip() for x in args.self_int_pushes.split(',')}
+    ship = set() if args.no_self_int else (
+        ({f'field_s{base_steps}'} if 'field' in want else set())
+        | ({'ode'} if 'ode' in want else set()))
     tpl_stats, tpl_hit = ctx.get('template_si', (None, None))
     per_push, self_int = {}, {'template': tpl_stats} if ship else {}
     for name, pv in pushes.items():
@@ -747,6 +740,10 @@ def main():
                     help='write a colour-coded PLY per push (~13 MB each) for a 3D viewer')
     ap.add_argument('--no_self_int', action='store_true',
                     help='skip (5) self-intersection; it is the slow part on a 655k-face mesh')
+    ap.add_argument('--self_int_pushes', default='field,ode',
+                    help="which pushes get (5): comma list of 'field' and 'ode'. The "
+                         "field push is the applied transform and the one to report; "
+                         "'field' alone halves this pass")
     ap.add_argument('--damp', action='store_true', help='measure candidate dampers')
     ap.add_argument('--damp_thresh', default='0.05,0.2')
     ap.add_argument('--damp_sigma', default='1,2')
