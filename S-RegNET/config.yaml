@@ -84,8 +84,8 @@ loss:
   class_weights: [0.1, 1.0, 1.0, 5.0, 1.0]
 
   # Geometric regularization
-  bending:       0.15         # second-order smoothness
-  jacobian:      1.0          # anti-folding; linear-neg + top-K + pre-fold barrier
+  bending:       0.05         # second-order smoothness
+  jacobian:      0.4          # anti-folding; linear-neg + top-K + pre-fold barrier
   displacement:  0.01          # penalises large per-voxel displacements
 
   # Lambda-based adaptive regularization
