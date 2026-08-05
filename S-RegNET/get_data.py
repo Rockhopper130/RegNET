@@ -41,14 +41,19 @@ class SegDataset(Dataset):
         seg_filename="seg4_onehot.npy",
         synthseg_filename="synthseg_onehot.npy",
         preload=True,
+        max_subjects=None,
+        load_synthseg=True,
     ):
         with open(data_list_file, 'r') as f:
             seg_paths = f.read().splitlines()
 
         self.subject_dirs = [os.path.dirname(p) for p in seg_paths]
+        if max_subjects is not None:
+            self.subject_dirs = self.subject_dirs[:max_subjects]
         self.seg_filename = seg_filename
         self.synthseg_filename = synthseg_filename
         self.target_size = target_size
+        self.load_synthseg = load_synthseg
 
         self.template_seg = self._load_seg(template_seg_path, target_size)
 
@@ -60,14 +65,17 @@ class SegDataset(Dataset):
     def _preload_all(self):
         from tqdm import tqdm
         n = len(self.subject_dirs)
-        print(f"Preloading {n} GT + SynthSeg seg volumes into RAM...")
-        self._gt_cache, self._synthseg_cache = [], []
+        what = "GT + SynthSeg" if self.load_synthseg else "GT"
+        print(f"Preloading {n} {what} seg volumes into RAM...")
+        self._gt_cache = []
+        self._synthseg_cache = [] if self.load_synthseg else None
         for subject_dir in tqdm(self.subject_dirs, desc="Preloading", ncols=80):
             self._gt_cache.append(
                 self._load_seg(os.path.join(subject_dir, self.seg_filename), self.target_size))
-            self._synthseg_cache.append(
-                self._load_seg(os.path.join(subject_dir, self.synthseg_filename), self.target_size))
-        print(f"Preloading complete. RAM cached {n} GT + {n} SynthSeg volumes.")
+            if self.load_synthseg:
+                self._synthseg_cache.append(
+                    self._load_seg(os.path.join(subject_dir, self.synthseg_filename), self.target_size))
+        print(f"Preloading complete. RAM cached {n} {what} volume(s).")
 
     def _load_seg(self, path, target_size):
         seg = np.load(path)
@@ -82,13 +90,18 @@ class SegDataset(Dataset):
         return len(self.subject_dirs)
 
     def __getitem__(self, idx):
+        subject_dir = self.subject_dirs[idx]
         if self._gt_cache is not None:
             gt_seg = self._gt_cache[idx]
-            synthseg_seg = self._synthseg_cache[idx]
         else:
-            subject_dir = self.subject_dirs[idx]
             gt_seg = self._load_seg(
                 os.path.join(subject_dir, self.seg_filename), self.target_size)
+
+        if not self.load_synthseg:
+            synthseg_seg = None
+        elif self._synthseg_cache is not None:
+            synthseg_seg = self._synthseg_cache[idx]
+        else:
             synthseg_seg = self._load_seg(
                 os.path.join(subject_dir, self.synthseg_filename), self.target_size)
 

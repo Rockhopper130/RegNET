@@ -70,10 +70,184 @@ def triangle_flip_fraction(verts_before, verts_after, faces):
     """Fraction of faces whose orientation reversed under a deformation
     (dot(normal_before, normal_after) < 0) — the surface analogue of a negative
     Jacobian, which voxel folding alone does not capture. A diffeomorphic warp
-    drives this to ~0."""
+    drives this to ~0.
+
+    Beware: on a real pushed cortical mesh most of this count is a metric
+    artifact — a normal can rotate past 90 degrees under pure shear at det > 0,
+    and near-degenerate slivers reverse on interpolation noise alone. Score the
+    deliverable with `self_intersections`, which is a genuine embedding failure."""
     nb = _face_normals(np.asarray(verts_before), np.asarray(faces))
     na = _face_normals(np.asarray(verts_after), np.asarray(faces))
     return float(((nb * na).sum(1) < 0).mean())
+
+
+# =============================================================================
+# Self-intersection — the embedding check (pure numpy)
+# =============================================================================
+# Moving vertices cannot change V - E + F, so a pushed mesh is combinatorially
+# genus-0 however violent the warp; `mesh_genus` on it is a tautology. What a
+# warp CAN destroy is the EMBEDDING: the surface passing through itself. That is
+# the only mesh number the genus-0 deliverable can actually fail on, and this is
+# it. Scale-free (the broadphase cell is sized off the triangles themselves), so
+# it reads the same on normalized [-1,1] verts or world mm.
+
+def _seg_hits_tri(P, Q, T, eps=1e-14):
+    """Möller-Trumbore: does the segment P->Q pierce triangle T? All (N,3)/(N,3,3)."""
+    D, e1, e2 = Q - P, T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]
+    pv = np.cross(D, e2)
+    det = (e1 * pv).sum(1)
+    ok = np.abs(det) >= eps                       # parallel segment: no crossing
+    inv = np.zeros_like(det)
+    np.divide(1.0, det, out=inv, where=ok)
+    tv = P - T[:, 0]
+    qv = np.cross(tv, e1)
+    u = (tv * pv).sum(1) * inv                    # barycentric in T
+    w = (D * qv).sum(1) * inv
+    t = (e2 * qv).sum(1) * inv                    # position along the segment
+    return ok & (u >= 0) & (w >= 0) & (u + w <= 1) & (t >= 0) & (t <= 1)
+
+
+def _tri_tri_cross(A, B):
+    """Do the paired triangles A[i], B[i] cross? Two triangles intersect iff an
+    edge of one pierces the other, so six segment tests decide it. Coplanar
+    overlap is measure-zero and is not detected."""
+    hit = np.zeros(len(A), dtype=bool)
+    for X, Y in ((A, B), (B, A)):
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            hit |= _seg_hits_tri(X[:, a], X[:, b], Y)
+    return hit
+
+
+def _cell_pairs(lo, hi, h):
+    """Candidate pairs: triangles whose boxes share a cell of a uniform grid.
+
+    Every triangle is inserted into each cell its own box overlaps. A triangle
+    several times the typical size then pays for itself in extra cells, instead
+    of forcing every other triangle to be queried at ITS radius — the failure
+    mode that makes a single-radius neighbour query blow up on a stretched
+    surface (311M candidates for 954K real pairs, measured)."""
+    c_lo = np.floor(lo / h).astype(np.int64)
+    c_hi = np.floor(hi / h).astype(np.int64)
+    span = c_hi - c_lo + 1                                   # cells per axis
+    cnt = span.prod(1)
+    tri = np.repeat(np.arange(len(lo)), cnt)
+    k = np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+    nx, ny = np.repeat(span[:, 0], cnt), np.repeat(span[:, 1], cnt)
+    off = np.stack([k % nx, (k // nx) % ny, k // (nx * ny)], 1)
+    g = np.repeat(c_lo, cnt, axis=0) + off - c_lo.min(0)     # non-negative cell
+    dim = c_hi.max(0) - c_lo.min(0) + 1
+    ids = (g[:, 2] * dim[1] + g[:, 1]) * dim[0] + g[:, 0]
+
+    order = np.argsort(ids, kind='stable')
+    ids_s, tri_s = ids[order], tri[order]
+    start = np.flatnonzero(np.r_[True, ids_s[1:] != ids_s[:-1]])
+    size = np.diff(np.r_[start, len(ids_s)])
+    out = []
+    for s in np.unique(size[size > 1]):                      # a few distinct sizes
+        blk = tri_s[start[size == s][:, None] + np.arange(s)]
+        a, b = np.triu_indices(s, 1)
+        out.append(np.stack([blk[:, a].ravel(), blk[:, b].ravel()], 1))
+    if not out:
+        return np.zeros((0, 2), np.int64)
+    p = np.vstack(out)
+    p.sort(1)                                                # i<j, then dedupe
+    key = p[:, 0] * (len(lo) + 1) + p[:, 1]
+    return p[np.unique(key, return_index=True)[1]]
+
+
+def _face_clusters(faces, sel):
+    """(n_clusters, largest) over the SELECTED faces, adjacency = shared vertex.
+    A few crossing patches read very differently from thousands of singletons.
+    Union-find in plain python: the selection is a few hundred faces."""
+    idx = np.flatnonzero(sel)
+    if len(idx) == 0:
+        return 0, 0
+    parent = {}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for f in idx:                                   # a face joins with its verts
+        for node in (('f', int(f)), *(('v', int(v)) for v in faces[f])):
+            parent.setdefault(node, node)
+        rf = find(('f', int(f)))
+        for v in faces[f]:
+            rv = find(('v', int(v)))
+            if rv != rf:
+                parent[rv] = rf
+                rf = find(rf)
+    lab = {}
+    for f in idx:
+        root = find(('f', int(f)))
+        lab[root] = lab.get(root, 0) + 1
+    return len(lab), max(lab.values())
+
+
+def self_intersections(verts, faces, cell=2.0, chunk=500_000, label='', quiet=True):
+    """Faces of this mesh that cross a NON-ADJACENT face of the same mesh.
+
+    Uniform-grid broadphase over triangle AABBs, narrowed by the boxes
+    themselves, then the exact six-segment triangle test. Pairs sharing a vertex
+    are dropped — neighbours always touch at it.
+
+    FreeSurfer ?h.white is not guaranteed intersection-free, so the un-pushed
+    template scores nonzero too (0.1007% on OASIS_OAS1_0406_MR1); subtract that
+    baseline and only the remainder is the warp's. The bounded-FFD clamp makes
+    every stage injective, so the remainder is expected to be ~0 and anything
+    larger is either the inverse solver not converging (watch its residual) or
+    sub-voxel non-injectivity of the trilinear interpolant.
+
+    Args:
+        verts: (N, 3) vertices, any consistent units.
+        faces: (M, 3) triangles.
+        cell:  broadphase cell size in units of the 99th-pct triangle radius.
+        chunk: candidate pairs narrowed per batch. The narrowphase materialises
+               ~150 bytes per pair (two float64 (3,3) triangles plus the cross
+               products), so 500k is ~1 GB peak — the value the pushed-mesh runs
+               were measured at. Raising it trades RAM for fewer iterations, and
+               on a 72M-candidate pushed mesh 2M can push a small box into swap,
+               which looks exactly like a hang.
+    Returns:
+        (stats dict, hit (M,) bool mask of crossing faces).
+    """
+    tri = np.asarray(verts)[faces].astype(np.float64)
+    lo, hi = tri.min(1), tri.max(1)
+    rad = np.linalg.norm(tri - tri.mean(1)[:, None, :], axis=2).max(1)
+    h = cell * float(np.percentile(rad, 99.0))
+    # Printed BEFORE the broadphase: it is one silent numpy block, and a mesh
+    # whose extent blew up (a diverged inverse) shows here rather than after the
+    # minutes it would then cost.
+    if not quiet:
+        print(f"      [self-int {label}] cell {h:.5f}, extent "
+              f"{float(np.ptp(lo, axis=0).max()):.3f}, broadphase...",
+              end='', flush=True)
+    pairs = _cell_pairs(lo, hi, h)
+    if not quiet:
+        print(f" {len(pairs):,} candidates", end='', flush=True)
+
+    hit, n_pairs, n_narrow = np.zeros(len(faces), dtype=bool), 0, 0
+    for s in range(0, len(pairs), chunk):
+        i, j = pairs[s:s + chunk].T
+        m = (lo[i] <= hi[j]).all(1) & (lo[j] <= hi[i]).all(1)             # boxes overlap
+        i, j = i[m], j[m]
+        m = ~(faces[i][:, :, None] == faces[j][:, None, :]).any((1, 2))   # not neighbours
+        i, j = i[m], j[m]
+        n_narrow += len(i)
+        x = _tri_tri_cross(tri[i], tri[j])
+        n_pairs += int(x.sum())
+        hit[i[x]] = True
+        hit[j[x]] = True
+    if not quiet:
+        print(f" -> {n_narrow:,} narrowphase -> {n_pairs:,} crossings", flush=True)
+
+    n_c, big = _face_clusters(faces, hit)
+    return {'si_candidates': int(len(pairs)), 'si_narrowphase': int(n_narrow),
+            'si_pairs': int(n_pairs), 'si_faces': int(hit.sum()),
+            'si_faces_pct': float(hit.mean() * 100),
+            'si_clusters': n_c, 'si_largest': big}, hit
 
 
 # =============================================================================
