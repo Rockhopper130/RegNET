@@ -1,0 +1,155 @@
+# =============================================================================
+# Seg-only Registration Configuration
+# =============================================================================
+# Configuration file for segmentation-only brain registration. Both inputs
+# are 5-channel one-hot segmentation maps; the model warps template_seg
+# toward sample_seg. Edit this file to customize paths, hyperparameters,
+# and loss weights.
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  # Training and validation data lists (text files; one path per line, each
+  # pointing at the seg .npy of one subject — the dataset loader infers the
+  # subject directory from the file path).
+  train_txt: "/shared/scratch/0/home/v_vijay_bala_mahalingam/neurite_oasis/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_vijay_bala_mahalingam/neurite_oasis/val.txt"
+
+  # Template subject seg (used as moving image for every registration).
+  template_seg_path: "/shared/scratch/0/home/v_vijay_bala_mahalingam/neurite_oasis/OASIS_OAS1_0001_MR1/seg4_onehot.npy"
+
+  # File naming inside each subject directory.
+  seg_filename: "seg4_onehot.npy"
+
+  # SynthSeg one-hot (produced by convert_synthseg_one_hot.py), stored next
+  # to seg_filename in each subject dir.
+  synthseg_filename: "seg4_onehot.npy"   # gt/gt: unused, point at gt to avoid needing synthseg
+
+  # Genus-0 WM template mesh (.npz: verts_norm, faces, n_lh) built by
+  # wm_template.py from the template subject's FreeSurfer lh/rh.white.
+  template_wm_mesh_path: "/shared/scratch/0/home/v_vijay_bala_mahalingam/oasis_data/scans/OASIS_OAS1_0025_MR1/template_wm_mesh.npz"
+
+# -----------------------------------------------------------------------------
+# Experiment routing
+# -----------------------------------------------------------------------------
+# input_source picks the model's 2nd input; supervision_target picks the Dice/CE
+# target. The deployable run is synthseg-conditioned, GT-supervised
+# (input_source: synthseg, supervision_target: gt); gt/gt is the sanity check.
+experiment:
+  input_source: gt            # synthseg | gt   — model's 2nd input
+  supervision_target: gt      # gt | synthseg   — Dice/CE target
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "/shared/scratch/0/home/v_vijay_bala_mahalingam/regnet_training_exp4"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [128, 128, 128]   # (D, H, W) — volume dims after resize
+  num_classes: 5                 # incl. background (channel 0)
+  seg_channels: 5
+
+# -----------------------------------------------------------------------------
+# Transform — bounded forward cubic-B-spline FFD
+# -----------------------------------------------------------------------------
+# The model predicts clamped control-point displacements on a cp_spacing
+# lattice; the clamp (delta_max = injectivity_k * cp_spacing * 2/N) keeps each
+# stage below the Choi-Lee injectivity bound, so the warp stays a diffeomorphism.
+# n_stages composed stages extend capture range. cp_spacing must be one of
+# {2, 4, 8} (it selects the U-Net decoder feature matching the control lattice).
+transform:
+  cp_spacing: 4        # control-lattice spacing in voxels (4 -> 32^3 lattice)
+  n_stages: 3          # composed FFD stages (1 = single FFD)
+  injectivity_k: 0.40  # fraction of the 3D Choi-Lee bound; keep <= 0.40 for a
+                       # guaranteed diffeomorphism. k is the safety knob; raise
+                       # cp_spacing / n_stages for capacity, not k.
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: false
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 60
+  num_workers: 0
+  pin_memory: true
+
+  learning_rate: 5.0e-5
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+
+  warmup_epochs: 15
+
+  use_amp: false
+
+  save_every: 10
+  patience: 25
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+# Voxel-Dice objective (SegRegistrationLoss). There is no Jacobian loss term:
+# the diffeomorphism guarantee comes from the FFD clamp, and folding is logged
+# as a diagnostic instead. bending acts on the control lattice, so re-tune its
+# weight if cp_spacing changes.
+loss:
+  # exp4 — Strict Diffeomorphic Stress Test: Jacobian penalty cranked up.
+  dice:          0.8    # foreground multi-class Dice of warped seg vs target
+  cross_entropy: 0.2    # CE vs argmax(target)
+  bending:       0.1    # B-spline bending energy on the FFD control lattice
+  jacobian:      3.0    # <-- anti-folding Jacobian-determinant penalty (stress test)
+  affine_reg:    0.01   # affine toward identity (only when affine.enabled: true; off here)
+
+  # Per-class weight [bg, cortex, subGM, WM, CSF] shared by Dice and CE. WM is
+  # the target structure, so it carries most of the weight; neighbours keep a
+  # small weight to keep the warp anatomically coherent. Delete this line for
+  # equal weighting. Checkpoints select on WM Dice.
+  class_weights: [0.1, 0.1, 0.1, 1.0, 0.1]
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
+
+# -----------------------------------------------------------------------------
+# Device Configuration
+# -----------------------------------------------------------------------------
+device:
+  gpu: "cuda:0"
+  cudnn_benchmark: true
+
+# -----------------------------------------------------------------------------
+# Visualization Settings (used by inference / run_inference_all)
+# -----------------------------------------------------------------------------
+visualization:
+  num_samples: 30
+  detailed_samples: 10
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex"
+    - "Subcortical GM"
+    - "White Matter"
+    - "CSF"
+
+# -----------------------------------------------------------------------------
+# Resume Training
+# -----------------------------------------------------------------------------
+resume:
+  checkpoint_path: null
