@@ -45,6 +45,20 @@ ENV/
 *.pickle
 data/
 datasets/
+
+# Neuroimaging volumes & surfaces (FreeSurfer / mesh outputs)
+*.mgz
+*.mgh
+*.stl
+*.obj
+*.ply
+*.vtk
+*.vtp
+*.white
+*.pial
+*.inflated
+fs_subjects/
+surfaces/
 raw_data/
 processed_data/
 train.txt
