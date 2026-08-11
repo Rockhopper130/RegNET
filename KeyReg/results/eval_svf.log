@@ -1,0 +1,10 @@
+=== SVF-A balanced (smooth=150) (epoch 227) ===
+  WM Dice (C3): 0.9651 | fg-mean: 0.9621
+  TRUE folding (interior, det<0):        0.5789%
+  brain-region folding:                  2.3787%
+  inference speed:                       188.0 ms/registration
+=== SVF-B min-fold (smooth=400, int=10) (epoch 267) ===
+  WM Dice (C3): 0.9583 | fg-mean: 0.9569
+  TRUE folding (interior, det<0):        0.2461%
+  brain-region folding:                  0.9832%
+  inference speed:                       188.9 ms/registration

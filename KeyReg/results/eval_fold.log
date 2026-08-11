@@ -1,0 +1,15 @@
+=== Max-Dice hybrid (TPS+flow) (epoch 282) ===
+  WM Dice (C3): 0.9501 | fg-mean: 0.9481
+  logged folding (old, boundary-padded): 4.0988%
+  TRUE folding (interior, det<0):        1.8156%
+  brain-region folding:                  3.3128%
+=== Diffeo hybrid (SVF residual) (epoch 215) ===
+  WM Dice (C3): 0.9609 | fg-mean: 0.9579
+  logged folding (old, boundary-padded): 4.4947%
+  TRUE folding (interior, det<0):        2.2208%
+  brain-region folding:                  2.4805%
+=== Fold-free (affine-TPS + SVF) (epoch 35) ===
+  WM Dice (C3): 0.9279 | fg-mean: 0.9240
+  logged folding (old, boundary-padded): 5.1691%
+  TRUE folding (interior, det<0):        2.9113%
+  brain-region folding:                  5.8594%

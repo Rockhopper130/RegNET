@@ -1,0 +1,7 @@
+template WM surface: 141,971 verts, 287,154 faces
+=== SVF-E (Dice 0.910) (epoch 191) ===
+  WM Dice: 0.9112 | logged folding: 0.0064%
+  self-intersection (triangle-flip %): 1.0904%
+=== SVF-F (Dice 0.841) (epoch 104) ===
+  WM Dice: 0.8458 | logged folding: 0.0008%
+  self-intersection (triangle-flip %): 0.1680%
