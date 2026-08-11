@@ -43,6 +43,11 @@ T(0.42,  0.265, "WM Dice", size=11.5, weight="bold", color="#555")
 T(0.575, 0.265, "Folding (Jacobian) %", size=11.5, weight="bold", color="#555")
 T(0.83,  0.265, "Self-intersection %", size=11.5, weight="bold", color="#555")
 
+# NOTE: these are SVF-E @ epoch 191 and SVF-F @ epoch 104, transcribed from
+# selfint.log, which ran while both jobs were still training. The finished runs
+# reached WM 0.9122 and 0.8532; the self-intersection column has not been
+# recomputed against the final checkpoints. See results/README.md before
+# presenting these. Numbers left as-is so the slide matches selfint.log.
 rows = [
     ("Balanced  (int=12, smooth=3000)", "0.9112", "0.0064", "1.09"),
     ("Fold-free (int=14, smooth=8000)", "0.8458", "0.0008", "0.168"),

@@ -131,6 +131,14 @@ slurm-*.out
 *.sbatch
 job_logs/
 
+# Tracked experiment evidence (overrides *.log / *.png above).
+# Small text logs + figures kept deliberately so results are auditable
+# against the code that produced them. Checkpoints stay out.
+!KeyReg/results/
+!KeyReg/results/*.log
+!KeyReg/results/*.png
+!KeyReg/results/*.md
+
 # Profiling & coverage
 *.prof
 *.lprof
