@@ -1,0 +1,4 @@
+template WM surface: 141,971 verts, 287,154 faces
+=== SVF-E FULL (330 train / 83 val) (epoch 229) ===
+  WM Dice: 0.9111 | logged folding: 0.0046%
+  self-intersection (triangle-flip %): 1.1431%

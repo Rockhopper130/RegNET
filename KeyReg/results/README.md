@@ -25,6 +25,36 @@ the image shell as folded. The `logged folding (old, boundary-padded)` values in
 `eval_fold.log` belong to the earlier hybrid models, which pre-date that fix, and
 are not comparable to the table above.
 
+## Full-dataset run (supersedes the 50-subject numbers)
+
+`run_svfE_full.sh` reruns the balanced config on the whole corpus — 330 train /
+83 val, with `OASIS_OAS1_0001_MR1` held out as the template (413 = 414 - 1),
+split with a fixed seed. Logs in `svfE_full.log`, self-intersection in
+`selfint_full.log`. All three columns come from the same final checkpoint
+(epoch 229), not a mid-training one.
+
+| | Train / Val | WM Dice | Folding % | Self-intersection % |
+|---|---|---|---|---|
+| SVF-E, original | 40 / 10 | 0.9122 | 0.0070 | 1.0904 * |
+| **SVF-E, full** | **330 / 83** | **0.9111** | **0.0046** | **1.1431** |
+
+\* measured on the epoch-191 checkpoint, not the finished run — see below.
+
+The headline Dice is unchanged (0.9122 -> 0.9111) on 6.6x the training data and
+8.3x the validation set, so the 0.91 was not an artifact of the small subset.
+Folding improved; self-intersection is marginally worse.
+
+**Self-intersection remains the weak point.** 1.14% of surface triangles flip
+orientation, so near-zero *volumetric* folding (0.0046%) does not deliver a
+topologically clean *surface*. SVF-F reaches 0.168% but only by giving up Dice
+(0.8532). Nothing in the sweep is simultaneously accurate and flip-free.
+
+Reproduce with:
+
+    ./runs/run_svfE_full.sh
+    python eval_selfint.py --val <...>/neurite_oasis/full_val.txt \
+                           --runs svf_E_full:"SVF-E FULL"
+
 ## Known discrepancy — read before quoting `selfint.log`
 
 `selfint.log` was written at 14:43 on 2026-08-07, while SVF-E and SVF-F were
