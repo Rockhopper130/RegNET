@@ -349,8 +349,13 @@ def main():
 
     tr_paths = read_list(args.train_txt); va_paths = read_list(args.val_txt)
     log(f"Preloading {len(tr_paths)} train + {len(va_paths)} val ...")
-    tr = torch.stack([load_seg(p, ts) for p in tr_paths]).to(dev)   # (Ntr,5,*)
-    va = torch.stack([load_seg(p, ts) for p in va_paths]).to(dev)
+    # Keep the corpus in CPU RAM and move one subject at a time to the GPU.
+    # At target=128 each subject is 5*128^3*4B = 41.9 MB, so the full 413-subject
+    # split is 17.3 GB — more than a 24 GB card has free once the model and
+    # activations are on it. Single-subject slices are all the loop ever touches
+    # (tr[i:i+1], va[k:k+1]), so residence is the only thing that changes here.
+    tr = torch.stack([load_seg(p, ts) for p in tr_paths])           # (Ntr,5,*) CPU
+    va = torch.stack([load_seg(p, ts) for p in va_paths])           # CPU
     template = load_seg(args.template, ts).unsqueeze(0).to(dev)
     cw = torch.tensor([1., 1., 1., args.wm_w], device=dev)          # fg class weights c1..c4 (WM=idx2)
 
@@ -377,7 +382,7 @@ def main():
         model.train(); t0 = time.time(); tot = 0.0; td = 0.0
         for _ in range(args.steps):
             i, j = random.randrange(len(tr)), random.randrange(len(tr))
-            moving, fixed = tr[i:i+1], tr[j:j+1]
+            moving, fixed = tr[i:i+1].to(dev), tr[j:j+1].to(dev)
             warped, grid, mkp, fkp = model(moving, fixed)
             dl = dice_loss(warped, fixed, cw)
             loss = dl + 0.2 * ce_loss(warped, fixed) + args.fold_w * jac_penalty(grid) \
@@ -393,8 +398,9 @@ def main():
         with torch.no_grad():
             pcs = np.zeros(5); fold = 0.0
             for k in range(len(va)):
-                warped, grid, _, _ = model(template, va[k:k+1])
-                pcs += np.array(dice_per_class(warped, va[k:k+1]))
+                vk = va[k:k+1].to(dev)
+                warped, grid, _, _ = model(template, vk)
+                pcs += np.array(dice_per_class(warped, vk))
                 fold += folding_pct(grid)
             pcs /= len(va); fold /= len(va)
         wm = pcs[3]; fg = pcs[1:].mean()

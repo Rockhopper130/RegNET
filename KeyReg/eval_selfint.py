@@ -2,15 +2,23 @@
 for the SVF models. Extract template WM surface via marching cubes, push it by
 each model's deformation for every val subject, count orientation-flipped
 (self-intersecting) triangles."""
-import sys, os
+import sys, os, argparse
 import numpy as np, torch, torch.nn.functional as F
 from skimage import measure
-sys.path.insert(0, "/shared/home/v_vijay_bala_mahalingam/RegNET/KeyReg")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from keyreg import SVFReg, load_seg, read_list, dice_per_class, identity_grid_vol
 
+_D = "/shared/scratch/0/home/v_vijay_bala_mahalingam"
+ap = argparse.ArgumentParser()
+ap.add_argument("--val", default=f"{_D}/neurite_oasis/val.txt")
+ap.add_argument("--template", default=f"{_D}/neurite_oasis/OASIS_OAS1_0001_MR1/seg4_onehot.npy")
+ap.add_argument("--runs", nargs="+", default=["svf_E:SVF-E (Dice 0.910)", "svf_F:SVF-F (Dice 0.841)"],
+                help="one or more DIRNAME:LABEL under keyreg_runs/")
+args = ap.parse_args()
+
 dev = "cuda:0"; ts = (128, 128, 128)
-TPL = "/shared/scratch/0/home/v_vijay_bala_mahalingam/neurite_oasis/OASIS_OAS1_0001_MR1/seg4_onehot.npy"
-VAL = "/shared/scratch/0/home/v_vijay_bala_mahalingam/neurite_oasis/val.txt"
+TPL = args.template
+VAL = args.val
 
 # ---- template WM surface (channel 3) ----
 tpl = load_seg(TPL, ts)                       # (5,D,H,W)
@@ -40,8 +48,10 @@ idg = identity_grid_vol(128, dev)
 tpl_b = tpl.unsqueeze(0).to(dev)
 va = read_list(VAL)
 
-for d, name in [("svf_E", "SVF-E (Dice 0.910)"), ("svf_F", "SVF-F (Dice 0.841)")]:
-    p = f"/shared/scratch/0/home/v_vijay_bala_mahalingam/keyreg_runs/{d}/best.pth"
+for spec in args.runs:
+    d, _, name = spec.partition(":")
+    name = name or d
+    p = f"{_D}/keyreg_runs/{d}/best.pth"
     ck = torch.load(p, map_location=dev, weights_only=False)
     m = build(ck)
     flips = []; pcs = np.zeros(5)
