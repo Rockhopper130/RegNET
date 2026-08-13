@@ -1,0 +1,303 @@
+[06:28:44] KeyReg start | K=256 lam=0.2 lr=0.0004 epochs=250 field_n=64
+Preloading 330 train + 83 val ...
+MODEL: keypoint-guided diffeomorphic SVF (int_steps=12, delta=0.2)
+Params: 2,121,399
+[06:30:07] Ep 1/250 | 45s | train_dice 0.6677 | VAL fg 0.6935 WM 0.7103 | fold 0.0000% | perclass C0 0.967 C1 0.583 C2 0.746 C3 0.710 C4 0.735
+   * new best WM 0.7103 (fold 0.0000%)
+[06:30:46] Ep 2/250 | 38s | train_dice 0.7559 | VAL fg 0.7628 WM 0.7831 | fold 0.0007% | perclass C0 0.973 C1 0.640 C2 0.813 C3 0.783 C4 0.815
+   * new best WM 0.7831 (fold 0.0007%)
+[06:31:24] Ep 3/250 | 38s | train_dice 0.7949 | VAL fg 0.7832 WM 0.7992 | fold 0.0002% | perclass C0 0.976 C1 0.669 C2 0.827 C3 0.799 C4 0.837
+   * new best WM 0.7992 (fold 0.0002%)
+[06:32:05] Ep 4/250 | 40s | train_dice 0.8089 | VAL fg 0.7893 WM 0.8074 | fold 0.0010% | perclass C0 0.976 C1 0.670 C2 0.845 C3 0.807 C4 0.835
+   * new best WM 0.8074 (fold 0.0010%)
+[06:32:48] Ep 5/250 | 42s | train_dice 0.8187 | VAL fg 0.8065 WM 0.8150 | fold 0.0007% | perclass C0 0.977 C1 0.686 C2 0.854 C3 0.815 C4 0.871
+   * new best WM 0.8150 (fold 0.0007%)
+[06:33:31] Ep 6/250 | 42s | train_dice 0.8370 | VAL fg 0.8187 WM 0.8238 | fold 0.0022% | perclass C0 0.978 C1 0.687 C2 0.869 C3 0.824 C4 0.895
+   * new best WM 0.8238 (fold 0.0022%)
+[06:34:13] Ep 7/250 | 41s | train_dice 0.8416 | VAL fg 0.8332 WM 0.8361 | fold 0.0020% | perclass C0 0.979 C1 0.710 C2 0.881 C3 0.836 C4 0.906
+   * new best WM 0.8361 (fold 0.0020%)
+[06:34:55] Ep 8/250 | 41s | train_dice 0.8459 | VAL fg 0.8310 WM 0.8334 | fold 0.0008% | perclass C0 0.979 C1 0.702 C2 0.873 C3 0.833 C4 0.916
+[06:35:33] Ep 9/250 | 38s | train_dice 0.8577 | VAL fg 0.8337 WM 0.8408 | fold 0.0024% | perclass C0 0.980 C1 0.720 C2 0.879 C3 0.841 C4 0.895
+   * new best WM 0.8408 (fold 0.0024%)
+[06:36:14] Ep 10/250 | 37s | train_dice 0.8591 | VAL fg 0.8395 WM 0.8412 | fold 0.0028% | perclass C0 0.980 C1 0.716 C2 0.879 C3 0.841 C4 0.922
+   * new best WM 0.8412 (fold 0.0028%)
+[06:36:57] Ep 11/250 | 42s | train_dice 0.8652 | VAL fg 0.8460 WM 0.8438 | fold 0.0017% | perclass C0 0.980 C1 0.719 C2 0.891 C3 0.844 C4 0.931
+   * new best WM 0.8438 (fold 0.0017%)
+[06:37:40] Ep 12/250 | 43s | train_dice 0.8608 | VAL fg 0.8436 WM 0.8432 | fold 0.0016% | perclass C0 0.981 C1 0.727 C2 0.885 C3 0.843 C4 0.919
+[06:38:22] Ep 13/250 | 42s | train_dice 0.8659 | VAL fg 0.8483 WM 0.8480 | fold 0.0021% | perclass C0 0.981 C1 0.728 C2 0.887 C3 0.848 C4 0.930
+   * new best WM 0.8480 (fold 0.0021%)
+[06:39:10] Ep 14/250 | 44s | train_dice 0.8628 | VAL fg 0.8528 WM 0.8479 | fold 0.0018% | perclass C0 0.981 C1 0.731 C2 0.889 C3 0.848 C4 0.943
+[06:40:20] Ep 15/250 | 69s | train_dice 0.8725 | VAL fg 0.8512 WM 0.8489 | fold 0.0024% | perclass C0 0.981 C1 0.731 C2 0.886 C3 0.849 C4 0.938
+   * new best WM 0.8489 (fold 0.0024%)
+[06:41:27] Ep 16/250 | 67s | train_dice 0.8746 | VAL fg 0.8582 WM 0.8575 | fold 0.0064% | perclass C0 0.982 C1 0.745 C2 0.884 C3 0.857 C4 0.946
+   * new best WM 0.8575 (fold 0.0064%)
+[06:42:31] Ep 17/250 | 63s | train_dice 0.8777 | VAL fg 0.8542 WM 0.8574 | fold 0.0062% | perclass C0 0.982 C1 0.743 C2 0.882 C3 0.857 C4 0.934
+[06:43:31] Ep 18/250 | 60s | train_dice 0.8752 | VAL fg 0.8640 WM 0.8619 | fold 0.0037% | perclass C0 0.982 C1 0.744 C2 0.899 C3 0.862 C4 0.952
+   * new best WM 0.8619 (fold 0.0037%)
+[06:44:36] Ep 19/250 | 63s | train_dice 0.8773 | VAL fg 0.8607 WM 0.8581 | fold 0.0027% | perclass C0 0.982 C1 0.743 C2 0.899 C3 0.858 C4 0.943
+[06:45:34] Ep 20/250 | 57s | train_dice 0.8819 | VAL fg 0.8676 WM 0.8618 | fold 0.0065% | perclass C0 0.983 C1 0.754 C2 0.897 C3 0.862 C4 0.958
+[06:46:38] Ep 21/250 | 64s | train_dice 0.8816 | VAL fg 0.8663 WM 0.8605 | fold 0.0042% | perclass C0 0.983 C1 0.751 C2 0.901 C3 0.861 C4 0.953
+[06:47:20] Ep 22/250 | 43s | train_dice 0.8868 | VAL fg 0.8693 WM 0.8626 | fold 0.0044% | perclass C0 0.983 C1 0.753 C2 0.904 C3 0.863 C4 0.957
+   * new best WM 0.8626 (fold 0.0044%)
+[06:48:13] Ep 23/250 | 52s | train_dice 0.8829 | VAL fg 0.8694 WM 0.8655 | fold 0.0043% | perclass C0 0.983 C1 0.756 C2 0.898 C3 0.865 C4 0.958
+   * new best WM 0.8655 (fold 0.0043%)
+[06:49:13] Ep 24/250 | 59s | train_dice 0.8861 | VAL fg 0.8716 WM 0.8691 | fold 0.0036% | perclass C0 0.983 C1 0.758 C2 0.904 C3 0.869 C4 0.955
+   * new best WM 0.8691 (fold 0.0036%)
+[06:50:08] Ep 25/250 | 55s | train_dice 0.8868 | VAL fg 0.8687 WM 0.8660 | fold 0.0041% | perclass C0 0.982 C1 0.749 C2 0.902 C3 0.866 C4 0.957
+[06:51:09] Ep 26/250 | 61s | train_dice 0.8884 | VAL fg 0.8704 WM 0.8654 | fold 0.0038% | perclass C0 0.982 C1 0.752 C2 0.902 C3 0.865 C4 0.962
+[06:52:05] Ep 27/250 | 55s | train_dice 0.8881 | VAL fg 0.8748 WM 0.8700 | fold 0.0043% | perclass C0 0.983 C1 0.763 C2 0.903 C3 0.870 C4 0.963
+   * new best WM 0.8700 (fold 0.0043%)
+[06:53:06] Ep 28/250 | 61s | train_dice 0.8921 | VAL fg 0.8791 WM 0.8748 | fold 0.0050% | perclass C0 0.984 C1 0.768 C2 0.910 C3 0.875 C4 0.963
+   * new best WM 0.8748 (fold 0.0050%)
+[06:54:08] Ep 29/250 | 61s | train_dice 0.8923 | VAL fg 0.8738 WM 0.8676 | fold 0.0031% | perclass C0 0.983 C1 0.758 C2 0.906 C3 0.868 C4 0.964
+[06:55:12] Ep 30/250 | 63s | train_dice 0.8887 | VAL fg 0.8721 WM 0.8698 | fold 0.0036% | perclass C0 0.983 C1 0.757 C2 0.902 C3 0.870 C4 0.959
+[06:56:14] Ep 31/250 | 62s | train_dice 0.8949 | VAL fg 0.8800 WM 0.8769 | fold 0.0080% | perclass C0 0.983 C1 0.767 C2 0.910 C3 0.877 C4 0.967
+   * new best WM 0.8769 (fold 0.0080%)
+[06:57:24] Ep 32/250 | 66s | train_dice 0.8953 | VAL fg 0.8741 WM 0.8722 | fold 0.0035% | perclass C0 0.983 C1 0.756 C2 0.908 C3 0.872 C4 0.959
+[06:58:32] Ep 33/250 | 68s | train_dice 0.8952 | VAL fg 0.8742 WM 0.8705 | fold 0.0027% | perclass C0 0.983 C1 0.758 C2 0.906 C3 0.870 C4 0.963
+[06:59:42] Ep 34/250 | 70s | train_dice 0.8960 | VAL fg 0.8812 WM 0.8803 | fold 0.0135% | perclass C0 0.984 C1 0.773 C2 0.913 C3 0.880 C4 0.958
+   * new best WM 0.8803 (fold 0.0135%)
+[07:00:43] Ep 35/250 | 60s | train_dice 0.8979 | VAL fg 0.8797 WM 0.8743 | fold 0.0037% | perclass C0 0.983 C1 0.766 C2 0.913 C3 0.874 C4 0.965
+[07:01:38] Ep 36/250 | 55s | train_dice 0.8993 | VAL fg 0.8801 WM 0.8766 | fold 0.0032% | perclass C0 0.984 C1 0.768 C2 0.911 C3 0.877 C4 0.966
+[07:02:46] Ep 37/250 | 68s | train_dice 0.8965 | VAL fg 0.8811 WM 0.8774 | fold 0.0031% | perclass C0 0.984 C1 0.769 C2 0.912 C3 0.877 C4 0.966
+[07:03:53] Ep 38/250 | 67s | train_dice 0.8955 | VAL fg 0.8754 WM 0.8718 | fold 0.0033% | perclass C0 0.983 C1 0.760 C2 0.902 C3 0.872 C4 0.968
+[07:05:01] Ep 39/250 | 69s | train_dice 0.9007 | VAL fg 0.8825 WM 0.8755 | fold 0.0057% | perclass C0 0.984 C1 0.775 C2 0.913 C3 0.875 C4 0.967
+[07:06:12] Ep 40/250 | 71s | train_dice 0.8999 | VAL fg 0.8861 WM 0.8826 | fold 0.0034% | perclass C0 0.984 C1 0.777 C2 0.915 C3 0.883 C4 0.970
+   * new best WM 0.8826 (fold 0.0034%)
+[07:07:26] Ep 41/250 | 73s | train_dice 0.9006 | VAL fg 0.8866 WM 0.8816 | fold 0.0048% | perclass C0 0.984 C1 0.776 C2 0.915 C3 0.882 C4 0.974
+[07:08:36] Ep 42/250 | 70s | train_dice 0.8989 | VAL fg 0.8895 WM 0.8864 | fold 0.0055% | perclass C0 0.985 C1 0.782 C2 0.919 C3 0.886 C4 0.971
+   * new best WM 0.8864 (fold 0.0055%)
+[07:09:47] Ep 43/250 | 70s | train_dice 0.8998 | VAL fg 0.8867 WM 0.8818 | fold 0.0058% | perclass C0 0.984 C1 0.777 C2 0.914 C3 0.882 C4 0.973
+[07:10:54] Ep 44/250 | 67s | train_dice 0.9018 | VAL fg 0.8897 WM 0.8856 | fold 0.0052% | perclass C0 0.985 C1 0.781 C2 0.919 C3 0.886 C4 0.974
+[07:11:58] Ep 45/250 | 64s | train_dice 0.8981 | VAL fg 0.8857 WM 0.8822 | fold 0.0046% | perclass C0 0.984 C1 0.773 C2 0.917 C3 0.882 C4 0.971
+[07:12:46] Ep 46/250 | 48s | train_dice 0.9007 | VAL fg 0.8825 WM 0.8783 | fold 0.0032% | perclass C0 0.984 C1 0.772 C2 0.916 C3 0.878 C4 0.964
+[07:13:51] Ep 47/250 | 65s | train_dice 0.9005 | VAL fg 0.8905 WM 0.8852 | fold 0.0031% | perclass C0 0.984 C1 0.779 C2 0.923 C3 0.885 C4 0.975
+[07:14:57] Ep 48/250 | 67s | train_dice 0.9037 | VAL fg 0.8848 WM 0.8790 | fold 0.0046% | perclass C0 0.984 C1 0.775 C2 0.915 C3 0.879 C4 0.971
+[07:16:02] Ep 49/250 | 65s | train_dice 0.9019 | VAL fg 0.8900 WM 0.8872 | fold 0.0041% | perclass C0 0.985 C1 0.784 C2 0.917 C3 0.887 C4 0.972
+   * new best WM 0.8872 (fold 0.0041%)
+[07:17:07] Ep 50/250 | 64s | train_dice 0.9007 | VAL fg 0.8903 WM 0.8867 | fold 0.0038% | perclass C0 0.984 C1 0.781 C2 0.920 C3 0.887 C4 0.974
+[07:18:10] Ep 51/250 | 63s | train_dice 0.8998 | VAL fg 0.8887 WM 0.8867 | fold 0.0054% | perclass C0 0.984 C1 0.780 C2 0.924 C3 0.887 C4 0.964
+[07:19:16] Ep 52/250 | 66s | train_dice 0.9061 | VAL fg 0.8888 WM 0.8842 | fold 0.0052% | perclass C0 0.984 C1 0.776 C2 0.922 C3 0.884 C4 0.973
+[07:20:19] Ep 53/250 | 63s | train_dice 0.9068 | VAL fg 0.8910 WM 0.8862 | fold 0.0033% | perclass C0 0.985 C1 0.785 C2 0.921 C3 0.886 C4 0.972
+[07:21:19] Ep 54/250 | 60s | train_dice 0.9016 | VAL fg 0.8919 WM 0.8859 | fold 0.0033% | perclass C0 0.985 C1 0.783 C2 0.924 C3 0.886 C4 0.974
+[07:21:58] Ep 55/250 | 39s | train_dice 0.9057 | VAL fg 0.8940 WM 0.8905 | fold 0.0092% | perclass C0 0.985 C1 0.787 C2 0.924 C3 0.891 C4 0.974
+   * new best WM 0.8905 (fold 0.0092%)
+[07:23:02] Ep 56/250 | 64s | train_dice 0.9057 | VAL fg 0.8943 WM 0.8906 | fold 0.0065% | perclass C0 0.985 C1 0.786 C2 0.925 C3 0.891 C4 0.976
+   * new best WM 0.8906 (fold 0.0065%)
+[07:24:10] Ep 57/250 | 66s | train_dice 0.9070 | VAL fg 0.8939 WM 0.8921 | fold 0.0076% | perclass C0 0.985 C1 0.788 C2 0.922 C3 0.892 C4 0.974
+   * new best WM 0.8921 (fold 0.0076%)
+[07:25:14] Ep 58/250 | 63s | train_dice 0.9072 | VAL fg 0.8928 WM 0.8904 | fold 0.0059% | perclass C0 0.985 C1 0.786 C2 0.920 C3 0.890 C4 0.975
+[07:26:13] Ep 59/250 | 60s | train_dice 0.9060 | VAL fg 0.8922 WM 0.8884 | fold 0.0070% | perclass C0 0.985 C1 0.784 C2 0.919 C3 0.888 C4 0.978
+[07:27:16] Ep 60/250 | 63s | train_dice 0.9059 | VAL fg 0.8930 WM 0.8888 | fold 0.0084% | perclass C0 0.986 C1 0.791 C2 0.920 C3 0.889 C4 0.972
+[07:28:14] Ep 61/250 | 58s | train_dice 0.9083 | VAL fg 0.8935 WM 0.8891 | fold 0.0046% | perclass C0 0.985 C1 0.787 C2 0.924 C3 0.889 C4 0.975
+[07:29:13] Ep 62/250 | 59s | train_dice 0.9054 | VAL fg 0.8955 WM 0.8908 | fold 0.0054% | perclass C0 0.985 C1 0.789 C2 0.928 C3 0.891 C4 0.974
+[07:30:12] Ep 63/250 | 59s | train_dice 0.9037 | VAL fg 0.8899 WM 0.8857 | fold 0.0039% | perclass C0 0.985 C1 0.783 C2 0.920 C3 0.886 C4 0.971
+[07:31:09] Ep 64/250 | 58s | train_dice 0.9080 | VAL fg 0.8955 WM 0.8918 | fold 0.0069% | perclass C0 0.985 C1 0.789 C2 0.928 C3 0.892 C4 0.973
+[07:31:54] Ep 65/250 | 45s | train_dice 0.9072 | VAL fg 0.8888 WM 0.8856 | fold 0.0032% | perclass C0 0.984 C1 0.781 C2 0.917 C3 0.886 C4 0.971
+[07:32:54] Ep 66/250 | 60s | train_dice 0.9085 | VAL fg 0.8967 WM 0.8919 | fold 0.0037% | perclass C0 0.985 C1 0.791 C2 0.927 C3 0.892 C4 0.977
+[07:33:50] Ep 67/250 | 56s | train_dice 0.9043 | VAL fg 0.8943 WM 0.8912 | fold 0.0052% | perclass C0 0.985 C1 0.788 C2 0.924 C3 0.891 C4 0.974
+[07:34:47] Ep 68/250 | 57s | train_dice 0.9054 | VAL fg 0.8929 WM 0.8884 | fold 0.0025% | perclass C0 0.985 C1 0.785 C2 0.926 C3 0.888 C4 0.972
+[07:35:48] Ep 69/250 | 61s | train_dice 0.9068 | VAL fg 0.8943 WM 0.8900 | fold 0.0041% | perclass C0 0.985 C1 0.786 C2 0.924 C3 0.890 C4 0.977
+[07:36:44] Ep 70/250 | 55s | train_dice 0.9083 | VAL fg 0.8978 WM 0.8943 | fold 0.0064% | perclass C0 0.986 C1 0.795 C2 0.927 C3 0.894 C4 0.975
+   * new best WM 0.8943 (fold 0.0064%)
+[07:37:35] Ep 71/250 | 51s | train_dice 0.9084 | VAL fg 0.8970 WM 0.8962 | fold 0.0053% | perclass C0 0.985 C1 0.789 C2 0.928 C3 0.896 C4 0.974
+   * new best WM 0.8962 (fold 0.0053%)
+[07:38:38] Ep 72/250 | 62s | train_dice 0.9084 | VAL fg 0.8960 WM 0.8936 | fold 0.0053% | perclass C0 0.985 C1 0.793 C2 0.924 C3 0.894 C4 0.974
+[07:39:34] Ep 73/250 | 56s | train_dice 0.9065 | VAL fg 0.8962 WM 0.8910 | fold 0.0059% | perclass C0 0.985 C1 0.790 C2 0.926 C3 0.891 C4 0.978
+[07:40:39] Ep 74/250 | 65s | train_dice 0.9127 | VAL fg 0.8926 WM 0.8909 | fold 0.0041% | perclass C0 0.985 C1 0.788 C2 0.924 C3 0.891 C4 0.967
+[07:41:36] Ep 75/250 | 58s | train_dice 0.9074 | VAL fg 0.8999 WM 0.8950 | fold 0.0060% | perclass C0 0.986 C1 0.796 C2 0.929 C3 0.895 C4 0.980
+[07:42:36] Ep 76/250 | 60s | train_dice 0.9115 | VAL fg 0.9003 WM 0.8948 | fold 0.0047% | perclass C0 0.985 C1 0.796 C2 0.930 C3 0.895 C4 0.980
+[07:43:26] Ep 77/250 | 50s | train_dice 0.9091 | VAL fg 0.8992 WM 0.8965 | fold 0.0048% | perclass C0 0.985 C1 0.794 C2 0.928 C3 0.897 C4 0.979
+   * new best WM 0.8965 (fold 0.0048%)
+[07:44:20] Ep 78/250 | 50s | train_dice 0.9084 | VAL fg 0.8957 WM 0.8924 | fold 0.0053% | perclass C0 0.985 C1 0.786 C2 0.926 C3 0.892 C4 0.978
+[07:45:18] Ep 79/250 | 58s | train_dice 0.9123 | VAL fg 0.9015 WM 0.8959 | fold 0.0065% | perclass C0 0.986 C1 0.799 C2 0.932 C3 0.896 C4 0.980
+[07:46:20] Ep 80/250 | 62s | train_dice 0.9119 | VAL fg 0.8969 WM 0.8932 | fold 0.0028% | perclass C0 0.985 C1 0.791 C2 0.927 C3 0.893 C4 0.976
+[07:47:21] Ep 81/250 | 61s | train_dice 0.9119 | VAL fg 0.8915 WM 0.8858 | fold 0.0033% | perclass C0 0.985 C1 0.783 C2 0.921 C3 0.886 C4 0.976
+[07:48:26] Ep 82/250 | 66s | train_dice 0.9112 | VAL fg 0.8995 WM 0.8949 | fold 0.0060% | perclass C0 0.985 C1 0.796 C2 0.929 C3 0.895 C4 0.978
+[07:49:32] Ep 83/250 | 66s | train_dice 0.9133 | VAL fg 0.8976 WM 0.8936 | fold 0.0030% | perclass C0 0.985 C1 0.791 C2 0.927 C3 0.894 C4 0.978
+[07:50:35] Ep 84/250 | 64s | train_dice 0.9111 | VAL fg 0.8990 WM 0.8963 | fold 0.0052% | perclass C0 0.986 C1 0.795 C2 0.929 C3 0.896 C4 0.976
+[07:51:36] Ep 85/250 | 61s | train_dice 0.9115 | VAL fg 0.9002 WM 0.8970 | fold 0.0071% | perclass C0 0.985 C1 0.793 C2 0.930 C3 0.897 C4 0.980
+   * new best WM 0.8970 (fold 0.0071%)
+[07:52:43] Ep 86/250 | 66s | train_dice 0.9107 | VAL fg 0.8991 WM 0.8937 | fold 0.0047% | perclass C0 0.986 C1 0.794 C2 0.930 C3 0.894 C4 0.980
+[07:53:33] Ep 87/250 | 50s | train_dice 0.9120 | VAL fg 0.9029 WM 0.8994 | fold 0.0047% | perclass C0 0.986 C1 0.800 C2 0.931 C3 0.899 C4 0.982
+   * new best WM 0.8994 (fold 0.0047%)
+[07:54:26] Ep 88/250 | 52s | train_dice 0.9137 | VAL fg 0.9025 WM 0.8983 | fold 0.0054% | perclass C0 0.986 C1 0.801 C2 0.930 C3 0.898 C4 0.981
+[07:55:27] Ep 89/250 | 60s | train_dice 0.9122 | VAL fg 0.9034 WM 0.8994 | fold 0.0047% | perclass C0 0.986 C1 0.801 C2 0.933 C3 0.899 C4 0.981
+[07:56:27] Ep 90/250 | 61s | train_dice 0.9114 | VAL fg 0.8986 WM 0.8933 | fold 0.0068% | perclass C0 0.985 C1 0.791 C2 0.929 C3 0.893 C4 0.981
+[07:57:27] Ep 91/250 | 60s | train_dice 0.9133 | VAL fg 0.9000 WM 0.8974 | fold 0.0065% | perclass C0 0.985 C1 0.797 C2 0.930 C3 0.897 C4 0.975
+[07:58:27] Ep 92/250 | 60s | train_dice 0.9127 | VAL fg 0.9036 WM 0.8994 | fold 0.0048% | perclass C0 0.986 C1 0.802 C2 0.933 C3 0.899 C4 0.980
+   * new best WM 0.8994 (fold 0.0048%)
+[07:59:30] Ep 93/250 | 61s | train_dice 0.9121 | VAL fg 0.9021 WM 0.8991 | fold 0.0064% | perclass C0 0.986 C1 0.798 C2 0.931 C3 0.899 C4 0.981
+[08:00:31] Ep 94/250 | 61s | train_dice 0.9150 | VAL fg 0.9015 WM 0.8974 | fold 0.0044% | perclass C0 0.986 C1 0.797 C2 0.931 C3 0.897 C4 0.980
+[08:01:30] Ep 95/250 | 59s | train_dice 0.9119 | VAL fg 0.9033 WM 0.8993 | fold 0.0063% | perclass C0 0.986 C1 0.801 C2 0.933 C3 0.899 C4 0.980
+[08:02:30] Ep 96/250 | 60s | train_dice 0.9103 | VAL fg 0.9017 WM 0.8994 | fold 0.0045% | perclass C0 0.986 C1 0.800 C2 0.933 C3 0.899 C4 0.974
+   * new best WM 0.8994 (fold 0.0045%)
+[08:03:26] Ep 97/250 | 56s | train_dice 0.9129 | VAL fg 0.9012 WM 0.8970 | fold 0.0046% | perclass C0 0.986 C1 0.798 C2 0.929 C3 0.897 C4 0.980
+[08:04:04] Ep 98/250 | 38s | train_dice 0.9135 | VAL fg 0.9009 WM 0.8947 | fold 0.0042% | perclass C0 0.986 C1 0.795 C2 0.934 C3 0.895 C4 0.980
+[08:04:57] Ep 99/250 | 53s | train_dice 0.9140 | VAL fg 0.9020 WM 0.8999 | fold 0.0043% | perclass C0 0.986 C1 0.797 C2 0.932 C3 0.900 C4 0.980
+   * new best WM 0.8999 (fold 0.0043%)
+[08:06:02] Ep 100/250 | 65s | train_dice 0.9097 | VAL fg 0.9023 WM 0.8972 | fold 0.0047% | perclass C0 0.986 C1 0.796 C2 0.934 C3 0.897 C4 0.982
+[08:07:07] Ep 101/250 | 65s | train_dice 0.9116 | VAL fg 0.9036 WM 0.8994 | fold 0.0104% | perclass C0 0.986 C1 0.802 C2 0.933 C3 0.899 C4 0.980
+[08:07:59] Ep 102/250 | 52s | train_dice 0.9108 | VAL fg 0.9059 WM 0.9021 | fold 0.0072% | perclass C0 0.986 C1 0.806 C2 0.934 C3 0.902 C4 0.981
+   * new best WM 0.9021 (fold 0.0072%)
+[08:09:04] Ep 103/250 | 64s | train_dice 0.9173 | VAL fg 0.9037 WM 0.8984 | fold 0.0043% | perclass C0 0.986 C1 0.800 C2 0.933 C3 0.898 C4 0.983
+[08:10:06] Ep 104/250 | 62s | train_dice 0.9134 | VAL fg 0.9026 WM 0.8990 | fold 0.0030% | perclass C0 0.986 C1 0.798 C2 0.932 C3 0.899 C4 0.981
+[08:11:01] Ep 105/250 | 54s | train_dice 0.9136 | VAL fg 0.9025 WM 0.8977 | fold 0.0037% | perclass C0 0.986 C1 0.798 C2 0.933 C3 0.898 C4 0.982
+[08:12:03] Ep 106/250 | 62s | train_dice 0.9171 | VAL fg 0.9033 WM 0.8989 | fold 0.0044% | perclass C0 0.986 C1 0.801 C2 0.932 C3 0.899 C4 0.981
+[08:13:00] Ep 107/250 | 57s | train_dice 0.9138 | VAL fg 0.9039 WM 0.8996 | fold 0.0040% | perclass C0 0.986 C1 0.802 C2 0.934 C3 0.900 C4 0.980
+[08:13:59] Ep 108/250 | 59s | train_dice 0.9152 | VAL fg 0.9036 WM 0.8984 | fold 0.0041% | perclass C0 0.986 C1 0.800 C2 0.934 C3 0.898 C4 0.982
+[08:14:49] Ep 109/250 | 50s | train_dice 0.9128 | VAL fg 0.9056 WM 0.9021 | fold 0.0077% | perclass C0 0.986 C1 0.806 C2 0.933 C3 0.902 C4 0.981
+   * new best WM 0.9021 (fold 0.0077%)
+[08:15:28] Ep 110/250 | 39s | train_dice 0.9150 | VAL fg 0.9053 WM 0.9003 | fold 0.0035% | perclass C0 0.986 C1 0.804 C2 0.935 C3 0.900 C4 0.982
+[08:16:11] Ep 111/250 | 43s | train_dice 0.9169 | VAL fg 0.9042 WM 0.8999 | fold 0.0044% | perclass C0 0.986 C1 0.803 C2 0.933 C3 0.900 C4 0.980
+[08:17:11] Ep 112/250 | 60s | train_dice 0.9136 | VAL fg 0.9068 WM 0.9041 | fold 0.0044% | perclass C0 0.986 C1 0.808 C2 0.934 C3 0.904 C4 0.982
+   * new best WM 0.9041 (fold 0.0044%)
+[08:18:05] Ep 113/250 | 53s | train_dice 0.9146 | VAL fg 0.9044 WM 0.9000 | fold 0.0044% | perclass C0 0.986 C1 0.802 C2 0.934 C3 0.900 C4 0.981
+[08:19:02] Ep 114/250 | 57s | train_dice 0.9140 | VAL fg 0.9057 WM 0.9018 | fold 0.0050% | perclass C0 0.986 C1 0.805 C2 0.935 C3 0.902 C4 0.982
+[08:19:55] Ep 115/250 | 53s | train_dice 0.9145 | VAL fg 0.9063 WM 0.9021 | fold 0.0057% | perclass C0 0.986 C1 0.806 C2 0.934 C3 0.902 C4 0.983
+[08:20:49] Ep 116/250 | 55s | train_dice 0.9172 | VAL fg 0.9038 WM 0.9000 | fold 0.0041% | perclass C0 0.986 C1 0.803 C2 0.934 C3 0.900 C4 0.979
+[08:21:40] Ep 117/250 | 50s | train_dice 0.9124 | VAL fg 0.9046 WM 0.8993 | fold 0.0034% | perclass C0 0.986 C1 0.802 C2 0.936 C3 0.899 C4 0.980
+[08:22:35] Ep 118/250 | 55s | train_dice 0.9158 | VAL fg 0.9040 WM 0.9017 | fold 0.0045% | perclass C0 0.986 C1 0.802 C2 0.935 C3 0.902 C4 0.978
+[08:23:21] Ep 119/250 | 45s | train_dice 0.9149 | VAL fg 0.9042 WM 0.9002 | fold 0.0039% | perclass C0 0.986 C1 0.800 C2 0.934 C3 0.900 C4 0.983
+[08:24:21] Ep 120/250 | 61s | train_dice 0.9156 | VAL fg 0.9045 WM 0.9000 | fold 0.0033% | perclass C0 0.986 C1 0.804 C2 0.935 C3 0.900 C4 0.979
+[08:25:14] Ep 121/250 | 53s | train_dice 0.9172 | VAL fg 0.9046 WM 0.8999 | fold 0.0044% | perclass C0 0.986 C1 0.801 C2 0.935 C3 0.900 C4 0.982
+[08:26:16] Ep 122/250 | 62s | train_dice 0.9174 | VAL fg 0.9058 WM 0.9009 | fold 0.0055% | perclass C0 0.986 C1 0.804 C2 0.935 C3 0.901 C4 0.983
+[08:27:01] Ep 123/250 | 45s | train_dice 0.9157 | VAL fg 0.9066 WM 0.9023 | fold 0.0046% | perclass C0 0.986 C1 0.805 C2 0.936 C3 0.902 C4 0.983
+[08:28:03] Ep 124/250 | 62s | train_dice 0.9162 | VAL fg 0.9057 WM 0.9027 | fold 0.0056% | perclass C0 0.986 C1 0.804 C2 0.934 C3 0.903 C4 0.982
+[08:28:59] Ep 125/250 | 56s | train_dice 0.9158 | VAL fg 0.9023 WM 0.8986 | fold 0.0050% | perclass C0 0.986 C1 0.800 C2 0.933 C3 0.899 C4 0.978
+[08:30:02] Ep 126/250 | 62s | train_dice 0.9153 | VAL fg 0.9072 WM 0.9029 | fold 0.0050% | perclass C0 0.987 C1 0.807 C2 0.937 C3 0.903 C4 0.982
+[08:31:02] Ep 127/250 | 60s | train_dice 0.9181 | VAL fg 0.9059 WM 0.9035 | fold 0.0044% | perclass C0 0.986 C1 0.804 C2 0.934 C3 0.904 C4 0.982
+[08:31:56] Ep 128/250 | 54s | train_dice 0.9150 | VAL fg 0.9068 WM 0.9024 | fold 0.0039% | perclass C0 0.986 C1 0.806 C2 0.936 C3 0.902 C4 0.984
+[08:33:00] Ep 129/250 | 64s | train_dice 0.9188 | VAL fg 0.9045 WM 0.9001 | fold 0.0032% | perclass C0 0.986 C1 0.802 C2 0.935 C3 0.900 C4 0.981
+[08:34:04] Ep 130/250 | 64s | train_dice 0.9148 | VAL fg 0.9044 WM 0.9002 | fold 0.0070% | perclass C0 0.986 C1 0.802 C2 0.936 C3 0.900 C4 0.980
+[08:35:02] Ep 131/250 | 58s | train_dice 0.9173 | VAL fg 0.9054 WM 0.9017 | fold 0.0044% | perclass C0 0.986 C1 0.804 C2 0.934 C3 0.902 C4 0.982
+[08:36:02] Ep 132/250 | 60s | train_dice 0.9180 | VAL fg 0.9048 WM 0.9023 | fold 0.0037% | perclass C0 0.986 C1 0.804 C2 0.934 C3 0.902 C4 0.979
+[08:36:46] Ep 133/250 | 44s | train_dice 0.9146 | VAL fg 0.9065 WM 0.9021 | fold 0.0046% | perclass C0 0.986 C1 0.805 C2 0.936 C3 0.902 C4 0.983
+[08:37:31] Ep 134/250 | 45s | train_dice 0.9174 | VAL fg 0.9087 WM 0.9036 | fold 0.0049% | perclass C0 0.987 C1 0.811 C2 0.936 C3 0.904 C4 0.984
+[08:38:31] Ep 135/250 | 59s | train_dice 0.9198 | VAL fg 0.9074 WM 0.9028 | fold 0.0036% | perclass C0 0.986 C1 0.806 C2 0.938 C3 0.903 C4 0.983
+[08:39:29] Ep 136/250 | 58s | train_dice 0.9180 | VAL fg 0.9104 WM 0.9074 | fold 0.0050% | perclass C0 0.987 C1 0.811 C2 0.939 C3 0.907 C4 0.984
+   * new best WM 0.9074 (fold 0.0050%)
+[08:40:30] Ep 137/250 | 60s | train_dice 0.9165 | VAL fg 0.9073 WM 0.9034 | fold 0.0038% | perclass C0 0.986 C1 0.806 C2 0.937 C3 0.903 C4 0.983
+[08:41:27] Ep 138/250 | 57s | train_dice 0.9173 | VAL fg 0.9062 WM 0.9021 | fold 0.0037% | perclass C0 0.986 C1 0.804 C2 0.936 C3 0.902 C4 0.983
+[08:42:24] Ep 139/250 | 57s | train_dice 0.9176 | VAL fg 0.9079 WM 0.9033 | fold 0.0040% | perclass C0 0.987 C1 0.808 C2 0.937 C3 0.903 C4 0.983
+[08:43:32] Ep 140/250 | 68s | train_dice 0.9171 | VAL fg 0.9091 WM 0.9046 | fold 0.0037% | perclass C0 0.987 C1 0.810 C2 0.938 C3 0.905 C4 0.984
+[08:44:41] Ep 141/250 | 69s | train_dice 0.9189 | VAL fg 0.9076 WM 0.9039 | fold 0.0039% | perclass C0 0.986 C1 0.808 C2 0.936 C3 0.904 C4 0.982
+[08:45:50] Ep 142/250 | 69s | train_dice 0.9198 | VAL fg 0.9073 WM 0.9025 | fold 0.0053% | perclass C0 0.986 C1 0.808 C2 0.937 C3 0.903 C4 0.983
+[08:47:00] Ep 143/250 | 70s | train_dice 0.9176 | VAL fg 0.9085 WM 0.9044 | fold 0.0043% | perclass C0 0.987 C1 0.809 C2 0.937 C3 0.904 C4 0.983
+[08:48:05] Ep 144/250 | 65s | train_dice 0.9172 | VAL fg 0.9095 WM 0.9058 | fold 0.0046% | perclass C0 0.987 C1 0.811 C2 0.939 C3 0.906 C4 0.983
+[08:49:15] Ep 145/250 | 69s | train_dice 0.9175 | VAL fg 0.9070 WM 0.9027 | fold 0.0046% | perclass C0 0.987 C1 0.807 C2 0.937 C3 0.903 C4 0.981
+[08:50:19] Ep 146/250 | 65s | train_dice 0.9174 | VAL fg 0.9076 WM 0.9035 | fold 0.0042% | perclass C0 0.986 C1 0.805 C2 0.938 C3 0.903 C4 0.984
+[08:51:30] Ep 147/250 | 70s | train_dice 0.9178 | VAL fg 0.9096 WM 0.9055 | fold 0.0040% | perclass C0 0.987 C1 0.809 C2 0.939 C3 0.906 C4 0.984
+[08:52:40] Ep 148/250 | 70s | train_dice 0.9180 | VAL fg 0.9106 WM 0.9072 | fold 0.0057% | perclass C0 0.987 C1 0.813 C2 0.939 C3 0.907 C4 0.984
+[08:53:42] Ep 149/250 | 62s | train_dice 0.9175 | VAL fg 0.9097 WM 0.9045 | fold 0.0039% | perclass C0 0.987 C1 0.811 C2 0.940 C3 0.904 C4 0.984
+[08:54:20] Ep 150/250 | 38s | train_dice 0.9181 | VAL fg 0.9078 WM 0.9037 | fold 0.0060% | perclass C0 0.987 C1 0.808 C2 0.937 C3 0.904 C4 0.983
+[08:55:17] Ep 151/250 | 57s | train_dice 0.9178 | VAL fg 0.9095 WM 0.9057 | fold 0.0042% | perclass C0 0.987 C1 0.809 C2 0.939 C3 0.906 C4 0.984
+[08:56:22] Ep 152/250 | 65s | train_dice 0.9186 | VAL fg 0.9101 WM 0.9058 | fold 0.0048% | perclass C0 0.987 C1 0.813 C2 0.938 C3 0.906 C4 0.984
+[08:57:27] Ep 153/250 | 65s | train_dice 0.9178 | VAL fg 0.9100 WM 0.9062 | fold 0.0040% | perclass C0 0.987 C1 0.811 C2 0.940 C3 0.906 C4 0.982
+[08:58:35] Ep 154/250 | 68s | train_dice 0.9193 | VAL fg 0.9104 WM 0.9050 | fold 0.0037% | perclass C0 0.987 C1 0.812 C2 0.940 C3 0.905 C4 0.985
+[08:59:45] Ep 155/250 | 70s | train_dice 0.9191 | VAL fg 0.9109 WM 0.9062 | fold 0.0042% | perclass C0 0.987 C1 0.811 C2 0.941 C3 0.906 C4 0.985
+[09:00:48] Ep 156/250 | 63s | train_dice 0.9186 | VAL fg 0.9111 WM 0.9072 | fold 0.0047% | perclass C0 0.987 C1 0.814 C2 0.939 C3 0.907 C4 0.984
+[09:01:56] Ep 157/250 | 67s | train_dice 0.9198 | VAL fg 0.9100 WM 0.9054 | fold 0.0054% | perclass C0 0.987 C1 0.812 C2 0.939 C3 0.905 C4 0.983
+[09:03:03] Ep 158/250 | 68s | train_dice 0.9185 | VAL fg 0.9108 WM 0.9069 | fold 0.0039% | perclass C0 0.987 C1 0.811 C2 0.941 C3 0.907 C4 0.984
+[09:04:13] Ep 159/250 | 70s | train_dice 0.9186 | VAL fg 0.9106 WM 0.9067 | fold 0.0051% | perclass C0 0.987 C1 0.812 C2 0.940 C3 0.907 C4 0.984
+[09:05:20] Ep 160/250 | 67s | train_dice 0.9191 | VAL fg 0.9106 WM 0.9060 | fold 0.0047% | perclass C0 0.987 C1 0.811 C2 0.941 C3 0.906 C4 0.985
+[09:06:07] Ep 161/250 | 47s | train_dice 0.9189 | VAL fg 0.9094 WM 0.9038 | fold 0.0044% | perclass C0 0.987 C1 0.808 C2 0.940 C3 0.904 C4 0.985
+[09:07:12] Ep 162/250 | 66s | train_dice 0.9197 | VAL fg 0.9106 WM 0.9061 | fold 0.0038% | perclass C0 0.987 C1 0.811 C2 0.941 C3 0.906 C4 0.985
+[09:08:19] Ep 163/250 | 67s | train_dice 0.9195 | VAL fg 0.9104 WM 0.9064 | fold 0.0047% | perclass C0 0.987 C1 0.811 C2 0.941 C3 0.906 C4 0.984
+[09:09:26] Ep 164/250 | 67s | train_dice 0.9204 | VAL fg 0.9114 WM 0.9069 | fold 0.0041% | perclass C0 0.987 C1 0.814 C2 0.941 C3 0.907 C4 0.984
+[09:10:30] Ep 165/250 | 64s | train_dice 0.9200 | VAL fg 0.9115 WM 0.9066 | fold 0.0048% | perclass C0 0.987 C1 0.813 C2 0.941 C3 0.907 C4 0.985
+[09:11:37] Ep 166/250 | 66s | train_dice 0.9207 | VAL fg 0.9110 WM 0.9066 | fold 0.0046% | perclass C0 0.987 C1 0.813 C2 0.941 C3 0.907 C4 0.984
+[09:12:45] Ep 167/250 | 68s | train_dice 0.9202 | VAL fg 0.9110 WM 0.9074 | fold 0.0043% | perclass C0 0.987 C1 0.811 C2 0.941 C3 0.907 C4 0.984
+[09:13:49] Ep 168/250 | 64s | train_dice 0.9230 | VAL fg 0.9112 WM 0.9061 | fold 0.0051% | perclass C0 0.987 C1 0.813 C2 0.941 C3 0.906 C4 0.985
+[09:14:40] Ep 169/250 | 51s | train_dice 0.9199 | VAL fg 0.9121 WM 0.9090 | fold 0.0051% | perclass C0 0.987 C1 0.814 C2 0.940 C3 0.909 C4 0.985
+   * new best WM 0.9090 (fold 0.0051%)
+[09:15:19] Ep 170/250 | 38s | train_dice 0.9220 | VAL fg 0.9126 WM 0.9081 | fold 0.0044% | perclass C0 0.987 C1 0.817 C2 0.940 C3 0.908 C4 0.985
+[09:15:55] Ep 171/250 | 37s | train_dice 0.9202 | VAL fg 0.9120 WM 0.9071 | fold 0.0047% | perclass C0 0.987 C1 0.815 C2 0.941 C3 0.907 C4 0.985
+[09:16:33] Ep 172/250 | 38s | train_dice 0.9185 | VAL fg 0.9127 WM 0.9087 | fold 0.0040% | perclass C0 0.987 C1 0.815 C2 0.942 C3 0.909 C4 0.985
+[09:17:21] Ep 173/250 | 48s | train_dice 0.9223 | VAL fg 0.9122 WM 0.9087 | fold 0.0055% | perclass C0 0.987 C1 0.815 C2 0.941 C3 0.909 C4 0.984
+[09:18:03] Ep 174/250 | 42s | train_dice 0.9214 | VAL fg 0.9127 WM 0.9090 | fold 0.0050% | perclass C0 0.987 C1 0.815 C2 0.941 C3 0.909 C4 0.985
+   * new best WM 0.9090 (fold 0.0050%)
+[09:18:42] Ep 175/250 | 38s | train_dice 0.9205 | VAL fg 0.9129 WM 0.9103 | fold 0.0054% | perclass C0 0.987 C1 0.814 C2 0.942 C3 0.910 C4 0.985
+   * new best WM 0.9103 (fold 0.0054%)
+[09:19:20] Ep 176/250 | 38s | train_dice 0.9201 | VAL fg 0.9116 WM 0.9076 | fold 0.0038% | perclass C0 0.987 C1 0.813 C2 0.941 C3 0.908 C4 0.985
+[09:19:58] Ep 177/250 | 38s | train_dice 0.9212 | VAL fg 0.9113 WM 0.9068 | fold 0.0040% | perclass C0 0.987 C1 0.811 C2 0.942 C3 0.907 C4 0.985
+[09:20:37] Ep 178/250 | 39s | train_dice 0.9203 | VAL fg 0.9131 WM 0.9086 | fold 0.0052% | perclass C0 0.987 C1 0.817 C2 0.942 C3 0.909 C4 0.985
+[09:21:16] Ep 179/250 | 39s | train_dice 0.9217 | VAL fg 0.9127 WM 0.9085 | fold 0.0049% | perclass C0 0.987 C1 0.815 C2 0.942 C3 0.909 C4 0.985
+[09:21:55] Ep 180/250 | 39s | train_dice 0.9201 | VAL fg 0.9103 WM 0.9069 | fold 0.0038% | perclass C0 0.987 C1 0.811 C2 0.940 C3 0.907 C4 0.983
+[09:22:34] Ep 181/250 | 39s | train_dice 0.9214 | VAL fg 0.9134 WM 0.9104 | fold 0.0052% | perclass C0 0.987 C1 0.816 C2 0.942 C3 0.910 C4 0.985
+   * new best WM 0.9104 (fold 0.0052%)
+[09:23:14] Ep 182/250 | 39s | train_dice 0.9205 | VAL fg 0.9129 WM 0.9089 | fold 0.0047% | perclass C0 0.987 C1 0.816 C2 0.941 C3 0.909 C4 0.986
+[09:23:51] Ep 183/250 | 38s | train_dice 0.9222 | VAL fg 0.9116 WM 0.9070 | fold 0.0049% | perclass C0 0.987 C1 0.814 C2 0.940 C3 0.907 C4 0.985
+[09:24:29] Ep 184/250 | 38s | train_dice 0.9196 | VAL fg 0.9129 WM 0.9093 | fold 0.0045% | perclass C0 0.987 C1 0.815 C2 0.942 C3 0.909 C4 0.986
+[09:25:08] Ep 185/250 | 39s | train_dice 0.9210 | VAL fg 0.9132 WM 0.9097 | fold 0.0047% | perclass C0 0.987 C1 0.816 C2 0.942 C3 0.910 C4 0.985
+[09:25:47] Ep 186/250 | 39s | train_dice 0.9213 | VAL fg 0.9136 WM 0.9090 | fold 0.0044% | perclass C0 0.987 C1 0.817 C2 0.942 C3 0.909 C4 0.986
+[09:26:27] Ep 187/250 | 40s | train_dice 0.9223 | VAL fg 0.9115 WM 0.9066 | fold 0.0041% | perclass C0 0.987 C1 0.813 C2 0.941 C3 0.907 C4 0.986
+[09:27:06] Ep 188/250 | 39s | train_dice 0.9225 | VAL fg 0.9125 WM 0.9089 | fold 0.0056% | perclass C0 0.987 C1 0.814 C2 0.942 C3 0.909 C4 0.985
+[09:27:46] Ep 189/250 | 39s | train_dice 0.9213 | VAL fg 0.9124 WM 0.9081 | fold 0.0042% | perclass C0 0.987 C1 0.814 C2 0.942 C3 0.908 C4 0.986
+[09:28:24] Ep 190/250 | 38s | train_dice 0.9195 | VAL fg 0.9136 WM 0.9096 | fold 0.0046% | perclass C0 0.987 C1 0.817 C2 0.942 C3 0.910 C4 0.986
+[09:29:01] Ep 191/250 | 38s | train_dice 0.9226 | VAL fg 0.9126 WM 0.9084 | fold 0.0042% | perclass C0 0.987 C1 0.815 C2 0.942 C3 0.908 C4 0.986
+[09:29:40] Ep 192/250 | 39s | train_dice 0.9228 | VAL fg 0.9133 WM 0.9092 | fold 0.0047% | perclass C0 0.987 C1 0.816 C2 0.942 C3 0.909 C4 0.986
+[09:30:19] Ep 193/250 | 39s | train_dice 0.9199 | VAL fg 0.9139 WM 0.9096 | fold 0.0047% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.910 C4 0.986
+[09:30:58] Ep 194/250 | 39s | train_dice 0.9214 | VAL fg 0.9130 WM 0.9085 | fold 0.0047% | perclass C0 0.987 C1 0.815 C2 0.943 C3 0.908 C4 0.986
+[09:31:38] Ep 195/250 | 40s | train_dice 0.9212 | VAL fg 0.9130 WM 0.9090 | fold 0.0044% | perclass C0 0.987 C1 0.815 C2 0.943 C3 0.909 C4 0.985
+[09:32:18] Ep 196/250 | 39s | train_dice 0.9214 | VAL fg 0.9129 WM 0.9085 | fold 0.0038% | perclass C0 0.987 C1 0.815 C2 0.942 C3 0.909 C4 0.986
+[09:32:56] Ep 197/250 | 38s | train_dice 0.9236 | VAL fg 0.9133 WM 0.9087 | fold 0.0042% | perclass C0 0.987 C1 0.817 C2 0.942 C3 0.909 C4 0.985
+[09:33:34] Ep 198/250 | 38s | train_dice 0.9215 | VAL fg 0.9135 WM 0.9092 | fold 0.0044% | perclass C0 0.987 C1 0.816 C2 0.943 C3 0.909 C4 0.986
+[09:34:12] Ep 199/250 | 38s | train_dice 0.9229 | VAL fg 0.9134 WM 0.9096 | fold 0.0052% | perclass C0 0.987 C1 0.816 C2 0.943 C3 0.910 C4 0.985
+[09:34:51] Ep 200/250 | 39s | train_dice 0.9225 | VAL fg 0.9136 WM 0.9095 | fold 0.0042% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.909 C4 0.986
+[09:35:31] Ep 201/250 | 40s | train_dice 0.9219 | VAL fg 0.9135 WM 0.9094 | fold 0.0044% | perclass C0 0.987 C1 0.816 C2 0.943 C3 0.909 C4 0.986
+[09:36:11] Ep 202/250 | 40s | train_dice 0.9212 | VAL fg 0.9137 WM 0.9096 | fold 0.0047% | perclass C0 0.987 C1 0.817 C2 0.942 C3 0.910 C4 0.986
+[09:36:50] Ep 203/250 | 40s | train_dice 0.9217 | VAL fg 0.9137 WM 0.9096 | fold 0.0043% | perclass C0 0.987 C1 0.817 C2 0.942 C3 0.910 C4 0.986
+[09:37:29] Ep 204/250 | 39s | train_dice 0.9217 | VAL fg 0.9145 WM 0.9106 | fold 0.0047% | perclass C0 0.987 C1 0.819 C2 0.943 C3 0.911 C4 0.986
+   * new best WM 0.9106 (fold 0.0047%)
+[09:38:12] Ep 205/250 | 38s | train_dice 0.9218 | VAL fg 0.9136 WM 0.9093 | fold 0.0045% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.909 C4 0.986
+[09:38:49] Ep 206/250 | 38s | train_dice 0.9206 | VAL fg 0.9141 WM 0.9103 | fold 0.0045% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.910 C4 0.986
+[09:39:28] Ep 207/250 | 39s | train_dice 0.9214 | VAL fg 0.9131 WM 0.9088 | fold 0.0039% | perclass C0 0.987 C1 0.815 C2 0.943 C3 0.909 C4 0.986
+[09:40:07] Ep 208/250 | 39s | train_dice 0.9221 | VAL fg 0.9139 WM 0.9095 | fold 0.0045% | perclass C0 0.987 C1 0.817 C2 0.944 C3 0.909 C4 0.986
+[09:40:46] Ep 209/250 | 39s | train_dice 0.9233 | VAL fg 0.9139 WM 0.9102 | fold 0.0044% | perclass C0 0.987 C1 0.817 C2 0.942 C3 0.910 C4 0.986
+[09:41:26] Ep 210/250 | 39s | train_dice 0.9229 | VAL fg 0.9142 WM 0.9100 | fold 0.0049% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.910 C4 0.986
+[09:42:05] Ep 211/250 | 39s | train_dice 0.9214 | VAL fg 0.9146 WM 0.9102 | fold 0.0049% | perclass C0 0.987 C1 0.819 C2 0.944 C3 0.910 C4 0.986
+[09:42:43] Ep 212/250 | 38s | train_dice 0.9213 | VAL fg 0.9145 WM 0.9104 | fold 0.0049% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.910 C4 0.986
+[09:43:21] Ep 213/250 | 38s | train_dice 0.9230 | VAL fg 0.9140 WM 0.9103 | fold 0.0042% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.910 C4 0.986
+[09:44:00] Ep 214/250 | 39s | train_dice 0.9219 | VAL fg 0.9143 WM 0.9103 | fold 0.0040% | perclass C0 0.987 C1 0.817 C2 0.944 C3 0.910 C4 0.986
+[09:44:40] Ep 215/250 | 40s | train_dice 0.9226 | VAL fg 0.9143 WM 0.9105 | fold 0.0048% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.910 C4 0.986
+[09:45:19] Ep 216/250 | 39s | train_dice 0.9220 | VAL fg 0.9142 WM 0.9099 | fold 0.0042% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.910 C4 0.986
+[09:45:58] Ep 217/250 | 39s | train_dice 0.9214 | VAL fg 0.9143 WM 0.9100 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.910 C4 0.986
+[09:46:38] Ep 218/250 | 39s | train_dice 0.9222 | VAL fg 0.9146 WM 0.9105 | fold 0.0046% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.911 C4 0.986
+[09:47:17] Ep 219/250 | 39s | train_dice 0.9228 | VAL fg 0.9138 WM 0.9096 | fold 0.0043% | perclass C0 0.987 C1 0.817 C2 0.943 C3 0.910 C4 0.986
+[09:47:55] Ep 220/250 | 38s | train_dice 0.9211 | VAL fg 0.9146 WM 0.9106 | fold 0.0049% | perclass C0 0.987 C1 0.819 C2 0.943 C3 0.911 C4 0.986
+   * new best WM 0.9106 (fold 0.0049%)
+[09:48:38] Ep 221/250 | 37s | train_dice 0.9226 | VAL fg 0.9143 WM 0.9100 | fold 0.0047% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.910 C4 0.986
+[09:49:16] Ep 222/250 | 38s | train_dice 0.9238 | VAL fg 0.9145 WM 0.9104 | fold 0.0051% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.910 C4 0.986
+[09:49:56] Ep 223/250 | 39s | train_dice 0.9224 | VAL fg 0.9144 WM 0.9103 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.910 C4 0.986
+[09:50:35] Ep 224/250 | 39s | train_dice 0.9211 | VAL fg 0.9148 WM 0.9108 | fold 0.0046% | perclass C0 0.987 C1 0.819 C2 0.944 C3 0.911 C4 0.986
+   * new best WM 0.9108 (fold 0.0046%)
+[09:51:14] Ep 225/250 | 39s | train_dice 0.9230 | VAL fg 0.9144 WM 0.9105 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.910 C4 0.986
+[09:51:53] Ep 226/250 | 39s | train_dice 0.9247 | VAL fg 0.9145 WM 0.9105 | fold 0.0042% | perclass C0 0.987 C1 0.818 C2 0.943 C3 0.911 C4 0.986
+[09:52:31] Ep 227/250 | 38s | train_dice 0.9235 | VAL fg 0.9148 WM 0.9109 | fold 0.0043% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+   * new best WM 0.9109 (fold 0.0043%)
+[09:53:14] Ep 228/250 | 37s | train_dice 0.9212 | VAL fg 0.9147 WM 0.9107 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[09:53:51] Ep 229/250 | 38s | train_dice 0.9219 | VAL fg 0.9150 WM 0.9111 | fold 0.0046% | perclass C0 0.987 C1 0.819 C2 0.944 C3 0.911 C4 0.986
+   * new best WM 0.9111 (fold 0.0046%)
+[09:54:31] Ep 230/250 | 39s | train_dice 0.9241 | VAL fg 0.9146 WM 0.9107 | fold 0.0043% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[09:55:10] Ep 231/250 | 39s | train_dice 0.9245 | VAL fg 0.9147 WM 0.9107 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[09:55:50] Ep 232/250 | 40s | train_dice 0.9236 | VAL fg 0.9150 WM 0.9109 | fold 0.0044% | perclass C0 0.987 C1 0.819 C2 0.944 C3 0.911 C4 0.986
+[09:56:29] Ep 233/250 | 39s | train_dice 0.9223 | VAL fg 0.9148 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.819 C2 0.944 C3 0.911 C4 0.986
+[09:57:09] Ep 234/250 | 40s | train_dice 0.9230 | VAL fg 0.9148 WM 0.9109 | fold 0.0045% | perclass C0 0.987 C1 0.819 C2 0.944 C3 0.911 C4 0.986
+[09:57:47] Ep 235/250 | 39s | train_dice 0.9219 | VAL fg 0.9148 WM 0.9108 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[09:58:25] Ep 236/250 | 38s | train_dice 0.9225 | VAL fg 0.9148 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[09:59:03] Ep 237/250 | 38s | train_dice 0.9220 | VAL fg 0.9146 WM 0.9106 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[09:59:41] Ep 238/250 | 38s | train_dice 0.9220 | VAL fg 0.9148 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:00:19] Ep 239/250 | 38s | train_dice 0.9217 | VAL fg 0.9147 WM 0.9107 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:00:57] Ep 240/250 | 38s | train_dice 0.9230 | VAL fg 0.9148 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:01:36] Ep 241/250 | 39s | train_dice 0.9222 | VAL fg 0.9148 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.819 C2 0.944 C3 0.911 C4 0.986
+[10:02:15] Ep 242/250 | 39s | train_dice 0.9214 | VAL fg 0.9148 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:02:53] Ep 243/250 | 38s | train_dice 0.9225 | VAL fg 0.9148 WM 0.9107 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:03:32] Ep 244/250 | 39s | train_dice 0.9234 | VAL fg 0.9148 WM 0.9108 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:04:10] Ep 245/250 | 39s | train_dice 0.9243 | VAL fg 0.9148 WM 0.9108 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:04:48] Ep 246/250 | 38s | train_dice 0.9232 | VAL fg 0.9148 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:05:27] Ep 247/250 | 39s | train_dice 0.9231 | VAL fg 0.9148 WM 0.9108 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:06:05] Ep 248/250 | 38s | train_dice 0.9234 | VAL fg 0.9148 WM 0.9108 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:06:44] Ep 249/250 | 38s | train_dice 0.9222 | VAL fg 0.9149 WM 0.9108 | fold 0.0044% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:07:22] Ep 250/250 | 38s | train_dice 0.9239 | VAL fg 0.9149 WM 0.9108 | fold 0.0045% | perclass C0 0.987 C1 0.818 C2 0.944 C3 0.911 C4 0.986
+[10:07:22] DONE. best WM 0.9111
