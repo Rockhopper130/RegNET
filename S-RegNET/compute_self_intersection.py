@@ -174,7 +174,7 @@ def main():
 
     # Model + STN
     print("\nLoading model...")
-    model = SegRegistrationNet(seg_channels=seg_channels, use_affine=use_affine).to(device)
+    model = SegRegistrationNet(target_size=target_size, seg_channels=seg_channels, use_affine=use_affine).to(device)
     stn = SpatialTransformer(size=target_size, device=device).to(device)
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -210,7 +210,7 @@ def main():
             template_seg = data['template_seg'].unsqueeze(0).to(device)
             sample_seg = data['sample_seg'].unsqueeze(0).to(device)
 
-            final_flow, lambda_map, affine_matrix = model(template_seg, sample_seg)
+            final_flow, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
             warped_seg = _warp_template(template_seg, final_flow, affine_matrix, stn)
 
             dice_per_class, mean_dice = compute_dice_score(
@@ -229,7 +229,7 @@ def main():
                 'jacobian_det_loss_training': jac_train_loss,
             })
 
-            del template_seg, sample_seg, final_flow, lambda_map, affine_matrix
+            del template_seg, sample_seg, final_flow, flow_rv, lambda_map, affine_matrix
             del warped_seg, flow_cpu
             if device.type == 'cuda':
                 torch.cuda.empty_cache()

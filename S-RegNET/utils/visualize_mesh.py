@@ -44,6 +44,8 @@ Run from the S-RegNET directory (needs torch + nibabel):
     #   present, else auto-derived /meshes/<template subj>/{lh,rh}.white
     # --template_surf lh.white rh.white   explicit override
     # --push numeric | rv | rv_noaffine   which push to draw (all are measured)
+    # --subjects 0287,0203                pick val subjects by name substring
+    # --suffix _run2                      keep a rerun's outputs beside the old ones
 """
 
 import argparse
@@ -348,12 +350,13 @@ def load_template_mesh(cfg, template_surf):
 def load_subject_white(subject_dir, ref):
     """The subject's OWN lh+rh.white — the genus-0 gold standard, a like-for-like
     white surface rather than a marching-cubes isosurface of the WM label.
-    Returns (verts_norm, faces) or (None, None)."""
+    Returns (verts_norm, faces, n_lh) or (None, None, None). n_lh matters for
+    distance metrics: lh and rh are two separate surfaces whose medial walls sit
+    ~1-3 mm apart, so a nearest neighbour must be looked up within a hemisphere."""
     pair = _surf_pair(str(subject_dir).replace('/scans/', '/meshes/'))
     if pair is None:
-        return None, None
-    v, f, _ = _join_hemis(pair[0], pair[1], ref)
-    return v, f
+        return None, None, None
+    return _join_hemis(pair[0], pair[1], ref)
 
 
 def save_deformed_surf(verts_norm, faces, ref, path):
@@ -370,7 +373,7 @@ def save_deformed_surf(verts_norm, faces, ref, path):
 # =============================================================================
 
 def render_sample(name, n, gt_wm, curves, slices, dist, flip, res_mm, push_name,
-                  output, dpi=140):
+                  output, dpi=140, tmpl_label='template (undeformed)'):
     """3 ortho slices over the subject's GT WM mask + a distance histogram.
     Draw order matters: template and GT first (context), deformed last (on top)."""
     has_dist = dist is not None
@@ -392,7 +395,7 @@ def render_sample(name, n, gt_wm, curves, slices, dist, flip, res_mm, push_name,
         ax.axis('off')
 
     axes[0].legend(handles=[
-        Line2D([0], [0], color=TEMPLATE_C, lw=2, label='template (undeformed)'),
+        Line2D([0], [0], color=TEMPLATE_C, lw=2, label=tmpl_label),
         Line2D([0], [0], color=GT_C, lw=2, label="subject GT white surface"),
         Line2D([0], [0], color=DEFORM_C, lw=2, label='deformed template mesh'),
     ], loc='lower right', fontsize=7, framealpha=0.6)
@@ -437,6 +440,12 @@ def main():
     ap.add_argument('--num_samples', type=int, default=5,
                     help='subjects, evenly spaced across the val list')
     ap.add_argument('--sample_idxs', default=None, help='comma list of val indices')
+    ap.add_argument('--subjects', default=None,
+                    help='comma list of subject-name substrings, e.g. 0287,0203 '
+                         '(takes precedence over --sample_idxs / --num_samples)')
+    ap.add_argument('--suffix', default='',
+                    help='appended to every output basename, so a rerun does not '
+                         "overwrite an earlier one (e.g. --suffix _affine_tmpl)")
     ap.add_argument('--template_surf', nargs=2, metavar=('LH', 'RH'), default=None,
                     help='explicit template lh/rh white surfaces')
     ap.add_argument('--device', default='cuda:0')
@@ -473,7 +482,17 @@ def main():
     ds = SegDataset(args.val_txt or d['val_txt'], d['template_seg_path'],
                     target_size=ctx['target_size'], seg_filename=d['seg_filename'],
                     preload=False)
-    if args.sample_idxs:
+    if args.subjects:
+        names = [Path(sd).name for sd in ds.subject_dirs]
+        idxs = []
+        for pat in args.subjects.split(','):
+            hits = [i for i, nm in enumerate(names) if pat.strip() in nm]
+            if not hits:
+                raise SystemExit(f"[mesh] no val subject matches '{pat.strip()}' "
+                                 f"(val list looks like {names[:3]})")
+            idxs += hits
+        idxs = sorted(set(idxs))
+    elif args.sample_idxs:
         idxs = [int(x) for x in args.sample_idxs.split(',')]
     else:
         idxs = sorted(set(np.linspace(0, len(ds) - 1,
@@ -506,7 +525,7 @@ def main():
             res_mm = float(p['inv_residual_norm'].mean() * mm)
             nonconv = float((p['inv_residual_norm'] * mm > 1.0).mean() * 100)
 
-            gt_v, gt_f = load_subject_white(subject_dir, ref)
+            gt_v, gt_f, _gt_n_lh = load_subject_white(subject_dir, ref)
             if gt_v is not None:
                 gt = (gt_v, gt_f)
                 gt_w = norm_to_world(gt_v, ref)
@@ -525,15 +544,20 @@ def main():
                         dist = {'both': both, 'init_mean': float(init.mean())}
 
         gt_wm = (sample['sample_seg'].argmax(0).numpy() == WM_LABEL).astype(np.float32)
-        curves = [((verts_np, faces), TEMPLATE_C, 1.2)]
+        # Yellow = the template as the UNet sees it (A^-1 applied), so the gap to
+        # blue is the dense flow alone. Identical to the raw mesh when affine off.
+        curves = [((p['v_aligned'], faces), TEMPLATE_C, 1.2)]
         if gt is not None:
             curves.append((gt, GT_C, 1.2))
         curves.append(((v_s, faces), DEFORM_C, 1.7))
+        tmpl_label = 'template (affine-aligned)' if use_affine else 'template (undeformed)'
         render_sample(name, n, gt_wm, curves, centroid_slices(gt_wm > 0),
-                      dist, flip, res_mm, args.push, out / f'{name}_mesh.png', args.dpi)
+                      dist, flip, res_mm, args.push, out / f'{name}{args.suffix}_mesh.png',
+                      args.dpi, tmpl_label=tmpl_label)
 
         if not args.no_save_mesh and ref is not None:
-            save_deformed_surf(v_s, faces, ref, out / f'{name}_deformed.white.surf')
+            save_deformed_surf(v_s, faces, ref,
+                               out / f'{name}{args.suffix}_deformed.white.surf')
 
         r = {'subject': name, 'idx': int(i), 'push_drawn': args.push,
              'flip_pct': flip,
@@ -567,7 +591,8 @@ def main():
     mode_means = {m: {kk: float(np.mean([r['per_push_mode'][m][kk] for r in results]))
                       for kk in ('sym_mean_mm', 'sym_hd95_mm', 'flip_pct')}
                   for m in results[0]['per_push_mode']}
-    (out / 'summary.json').write_text(json.dumps(
+    summary_path = out / f'summary{args.suffix}.json'
+    summary_path.write_text(json.dumps(
         {'checkpoint': ckpt, 'affine': use_affine, 'n_verts': len(verts_np),
          'n_faces': len(faces), 'sample_idxs': idxs, 'push_drawn': args.push,
          'per_sample': results, 'mean': means, 'mean_per_push_mode': mode_means}, indent=2))
@@ -586,7 +611,7 @@ def main():
     print(f"[mesh] mean inverse residual {means['inverse_residual_mm']:.3f} mm, "
           f"{means['inverse_nonconverged_pct']:.2f}% of verts >1mm  "
           f"(large => the fixed point did not converge, 'numeric' is unreliable too)")
-    print(f"[mesh] summary -> {out / 'summary.json'}")
+    print(f"[mesh] summary -> {summary_path}")
 
 
 if __name__ == '__main__':

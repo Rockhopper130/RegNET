@@ -2,12 +2,18 @@
 Seg-only Registration Training Script
 
 Uses:
-- Template seg + Sample seg as input (both 5-ch one-hot)
+- Template seg + Input seg as the network's two inputs (both 5-ch one-hot)
 - Vanilla UNet with dual heads (flow + lambda)
 - Optional AffineNet pre-alignment
 
-Evaluation: Dice on warped template seg vs sample seg, plus per-voxel
-folding diagnostics via the Jacobian determinant.
+Input vs target: the network sees `input_seg`, every loss term scores
+against `sample_seg`. They are the same volume unless
+`data.input_seg_filename` is set — set it to the SynthSeg one-hot and you
+are training the deployment condition (SynthSeg in, GT supervision), which
+teaches the flow to denoise its input instead of reproducing it.
+
+Evaluation: Dice on warped template seg vs sample seg (the GT target),
+plus per-voxel folding diagnostics via the Jacobian determinant.
 
 Usage:
     python train.py                    # use default config.yaml
@@ -66,6 +72,9 @@ class Config:
         self.val_txt = cfg['data']['val_txt']
         self.template_seg_path = cfg['data']['template_seg_path']
         self.seg_filename = cfg['data'].get('seg_filename', 'seg4_onehot.npy')
+        # Network input seg. None/empty -> reuse seg_filename, i.e. the
+        # historical GT-in/GT-out setup.
+        self.input_seg_filename = cfg['data'].get('input_seg_filename') or None
 
         # Output
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -270,6 +279,35 @@ def _warp_template(template_seg, final_flow, affine_matrix, stn):
     return stn(template_seg, final_flow)
 
 
+def _invert_affine(affine_matrix):
+    """Invert a (B, 3, 4) affine: [R | t] -> [R^-1 | -R^-1 t].
+
+    fp32 throughout — torch.inverse under AMP autocast on half inputs is
+    both unsupported on some backends and numerically dubious.
+    """
+    R = affine_matrix[:, :, :3].float()
+    t = affine_matrix[:, :, 3:].float()
+    R_inv = torch.inverse(R)
+    return torch.cat([R_inv, -torch.bmm(R_inv, t)], dim=2)
+
+
+def _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn):
+    """
+    Exact mirror of _warp_template. Forward resamples template at
+    A(x + u_fw(x)), so the inverse must resample sample at the inverse
+    composition: dense inverse flow first (flow_rv lives in affine-aligned
+    space), then the inverse affine. Skipping the affine here trains
+    flow_rv against a target that is off by A^-1.
+    """
+    warped = stn(sample_seg, flow_rv)
+    if affine_matrix is not None:
+        inv_grid = F.affine_grid(_invert_affine(affine_matrix), warped.size(),
+                                 align_corners=False)
+        warped = F.grid_sample(warped, inv_grid, mode='bilinear',
+                               padding_mode='zeros', align_corners=False)
+    return warped
+
+
 def _accumulate_lambda_stats(stats_sum, lambda_map):
     """Per-batch mean/std/p05/p95 of the λ map, accumulated into stats_sum.
 
@@ -297,18 +335,19 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
 
     for batch in pbar:
         template_seg = batch['template_seg'].to(device)
-        sample_seg = batch['sample_seg'].to(device)
+        sample_seg = batch['sample_seg'].to(device)      # supervision target
+        input_seg = batch['input_seg'].to(device)        # what the net sees
 
         optimizer.zero_grad()
 
         with torch.cuda.amp.autocast(enabled=config.use_amp):
-            flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
+            flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, input_seg)
             warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
-            warped_seg_rv = stn(sample_seg, flow_rv)
+            warped_seg_rv = _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn)
 
             loss, loss_dict = loss_fn(
                 warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
-                flow_fw, flow_rv, lambda_map, stn,
+                flow_fw, flow_rv, lambda_map,
                 affine_matrix=affine_matrix, return_components=True,
             )
 
@@ -363,9 +402,10 @@ def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config):
 
     for batch_idx, batch in enumerate(pbar):
         template_seg = batch['template_seg'].to(device)
-        sample_seg = batch['sample_seg'].to(device)
+        sample_seg = batch['sample_seg'].to(device)      # supervision target
+        input_seg = batch['input_seg'].to(device)        # what the net sees
 
-        flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
+        flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, input_seg)
 
         # Diffeomorphism diagnostics.
         det_fw = jacobian_det(flow_fw) / det_ref
@@ -377,11 +417,11 @@ def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config):
             worst_min_det_subject = batch_idx
 
         warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
-        warped_seg_rv = stn(sample_seg, flow_rv)
+        warped_seg_rv = _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn)
 
         loss, loss_dict = loss_fn(
             warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
-            flow_fw, flow_rv, lambda_map, stn,
+            flow_fw, flow_rv, lambda_map,
             affine_matrix=affine_matrix, return_components=True,
         )
 
@@ -460,15 +500,21 @@ def main():
     # ==========================================================================
     logger.info("Loading datasets...")
 
+    logger.info(f"  net input      : {config.input_seg_filename or config.seg_filename}"
+                f"{'' if config.input_seg_filename else '  (same as target)'}")
+    logger.info(f"  supervision on : {config.seg_filename}")
+
     train_dataset = SegDataset(
         config.train_txt, config.template_seg_path,
         target_size=config.target_size,
         seg_filename=config.seg_filename,
+        input_seg_filename=config.input_seg_filename,
     )
     val_dataset = SegDataset(
         config.val_txt, config.template_seg_path,
         target_size=config.target_size,
         seg_filename=config.seg_filename,
+        input_seg_filename=config.input_seg_filename,
     )
 
     train_loader = DataLoader(

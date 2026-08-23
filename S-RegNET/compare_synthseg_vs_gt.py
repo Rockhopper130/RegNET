@@ -188,7 +188,7 @@ def main():
         gt_components = per_class_components(gt,       num_classes)
 
         # Model: register template → synthseg, then score warped vs GT.
-        final_flow, lambda_map, affine_matrix = model(template_seg, synthseg_b)
+        final_flow, flow_rv, lambda_map, affine_matrix = model(template_seg, synthseg_b)
         if affine_matrix is not None:
             affine_grid = F.affine_grid(affine_matrix, template_seg.size(),
                                         align_corners=False)

@@ -18,6 +18,9 @@ Composite (sum of weighted terms; weights live in config.yaml -> loss):
       - lambda_prior:                anatomy-aware Gaussian pulling λ toward
                                      (1 - dilated_boundary(sample_seg))
 
+    (No cycle term — single-SVF model makes the inverse exact; see
+    cycle_consistency_loss, kept only as a diagnostic.)
+
     Affine regularization (only active when affine_matrix is not None)
       - affine_reg:   MSE against the 3x4 identity affine
       - affine_ortho: MSE of RᵀR vs I on the rotation submatrix
@@ -283,11 +286,16 @@ def affine_orthogonality_loss(affine_matrix):
 
 
 # =============================================================================
-# Cycle Consistency
+# Cycle Consistency (diagnostic only)
 # =============================================================================
 
 def cycle_consistency_loss(flow_fw, flow_rv, stn):
-    """Cycle consistency between forward and reverse flows."""
+    """Composition error between forward and reverse flows.
+
+    No longer a training term: flow_rv = exp(-v) is the exact inverse of
+    flow_fw = exp(+v) by construction, so this now measures only
+    scaling-and-squaring integration error. Kept as a diagnostic
+    (utils/visualize_run.py, utils/evaluate_all.py)."""
     fw_rv = flow_fw + stn(flow_rv, flow_fw)
     rv_fw = flow_rv + stn(flow_fw, flow_rv)
     return torch.mean(fw_rv ** 2) + torch.mean(rv_fw ** 2)
@@ -305,8 +313,10 @@ class SegRegistrationLoss(nn.Module):
       - dice, cross_entropy (symmetric)
       - bending, jacobian, displacement (symmetric)
       - lambda_smoothness, lambda_prior
-      - cycle
       - affine_reg, affine_ortho  (active only when affine_matrix is not None)
+
+    No cycle term: the model integrates a single velocity field both ways
+    (exp(+v), exp(-v)), so inverse consistency holds exactly by construction.
 
     `weights` is required — config.yaml is the single source of truth. Any
     key missing from `weights` is treated as 0.0 at sum time.
@@ -325,7 +335,7 @@ class SegRegistrationLoss(nn.Module):
             self.class_weights = torch.tensor(self.class_weights, dtype=torch.float32)
 
     def forward(self, warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
-                flow_fw, flow_rv, lambda_map, stn,
+                flow_fw, flow_rv, lambda_map,
                 affine_matrix=None, return_components=False):
         loss_dict = {}
 
@@ -341,9 +351,6 @@ class SegRegistrationLoss(nn.Module):
         # Lambda-adaptive (linear-λ smoothness applied to both + anatomy prior)
         loss_dict['lambda_smoothness'] = lambda_weighted_smoothness(flow_fw, lambda_map) + lambda_weighted_smoothness(flow_rv, lambda_map)
         loss_dict['lambda_prior'] = lambda_prior_loss(lambda_map, sample_seg)
-
-        # Cycle consistency
-        loss_dict['cycle'] = cycle_consistency_loss(flow_fw, flow_rv, stn)
 
         # Affine
         if affine_matrix is not None:

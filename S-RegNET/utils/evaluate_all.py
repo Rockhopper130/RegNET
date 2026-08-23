@@ -10,11 +10,24 @@ numbers and pooling them silently would flatter the model.
 Per subject:
   voxel  dice_c0..c4, dice_fg_mean, dice_wm, folding_pct, min_det, cycle,
          flow_mag_mean/max, lambda_mean            (the numbers training optimizes)
-  mesh   sym_mean_mm, sym_hd95_mm, mesh_to_gt_mm, gt_to_mesh_mm,
-         undeformed_mean_mm, flip_pct, flip_pct_dense_only, svf_parity_max,
-         inverse_residual_{mm,max_mm}, inverse_over_0p2mm_pct
+  mesh   sym_{mean,hd95,max}_mm and their _lh_/_rh_ parts, mesh_to_gt_mm,
+         gt_to_mesh_mm, undeformed_{mean,hd95,max}_mm, flip_pct,
+         flip_pct_dense_only, svf_parity_max, inverse_residual_{mm,max_mm},
+         inverse_over_0p2mm_pct
          (genus-0 template mesh pushed to the subject vs its own FreeSurfer
           white surface; skipped per subject when the surfaces are missing)
+         lh is scored against lh and rh against rh, and the headline
+         sym_{mean,hd95,max}_mm is the AVERAGE of the two hemisphere scores. A
+         single KD-tree over the joined mesh would let a medial vertex match the
+         opposite hemisphere (their walls sit ~1-3 mm apart) and flatter the tail;
+         the *_hemi_blind columns are that old joined match, kept to size the bias.
+         undeformed_* is symmetric like the deformed metric, so before/after are
+         now like-for-like — it used to be one-directional and thus not comparable.
+  --self_int adds si_faces{,_pct}, si_pairs, si_clusters, si_largest — the
+         topology deliverable. The un-pushed template is scored once into
+         metrics_summary.json:template_self_int, because the warp only ADDS to
+         whatever the template already had (raw 0406 ?h.white: 0.1007%; the
+         repaired template from utils/repair_template_mesh.py: 0).
 
 The default push is exp(-v), the exact inverse of an SVF (--push svf_inv). The
 inverse_* columns describe the OLD fixed-point inverse and are kept as a
@@ -36,17 +49,24 @@ Run from the S-RegNET directory:
     # --limit 5                    smoke-test on the first few subjects
     # --push numeric | rv | rv_noaffine    which mesh push to score (default numeric)
     # --no_mesh                    voxel metrics only (fast)
+    # --self_int                   self-intersecting faces of the pushed mesh
+    # --template_surf <lh> <rh>    override the template mesh (e.g. the repaired one)
 """
 
 import argparse
 import csv
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import nibabel as nib
 import torch
 from scipy.spatial import cKDTree
+
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))          # repo-root modules, whatever the cwd is
+sys.path.insert(0, str(_ROOT / 'utils'))
 
 from git_provenance import write_git_sha
 from get_data import SegDataset
@@ -56,6 +76,7 @@ from visualize_run import resolve_checkpoint, detect_affine, warp_template, fold
 from visualize_mesh import (WM_LABEL, load_template_mesh, load_subject_white, mm_per_norm,
                             norm_to_world, push_from_flows, ref_for, svf_inverse_flow,
                             triangle_flip_fraction)
+from mesh_flip_probe import self_intersections
 
 
 def svf_inverse(ctx, sample_seg):
@@ -84,15 +105,49 @@ def voxel_metrics(ctx, sample_seg):
     return row, (flow_fw, flow_rv), affine
 
 
-def mesh_metrics(verts_t, verts_np, faces, flows, affine, subject_dir, seg_filename, push,
-                 n_iter=500, alpha=0.5, flow_inv=None, parity=None, all_pushes=False):
+def sym_dist(mesh_w, gt_w, n_lh, gt_n_lh):
+    """Per-hemisphere symmetric nearest-neighbour distances in mm: returns
+    [(m2g_lh, g2m_lh), (m2g_rh, g2m_rh)].
+
+    lh and rh are two separate closed surfaces whose medial walls face each other
+    across the interhemispheric fissure, ~1-3 mm apart. One KD-tree over the joined
+    point cloud therefore lets a medial lh vertex match an rh triangle and report a
+    small distance for a vertex that landed on the wrong side of the brain — an
+    optimistic bias concentrated exactly in the tail the HD95 reads. lh is scored
+    against lh, rh against rh, and the two hemisphere scores are averaged."""
+    out = []
+    for m, g in ((slice(0, n_lh), slice(0, gt_n_lh)),
+                 (slice(n_lh, None), slice(gt_n_lh, None))):
+        out.append((cKDTree(gt_w[g]).query(mesh_w[m])[0],
+                    cKDTree(mesh_w[m]).query(gt_w[g])[0]))
+    return out
+
+
+def hemi_scores(per_hemi, prefix=''):
+    """lh and rh scored separately, then averaged — mean/hd95/max per hemisphere,
+    with the plain <prefix>{mean,hd95,max}_mm being the lh/rh average."""
+    row = {}
+    for tag, (m2g, g2m) in zip(('lh', 'rh'), per_hemi):
+        both = np.concatenate([m2g, g2m])
+        row[f'{prefix}mean_{tag}_mm'] = float(both.mean())
+        row[f'{prefix}hd95_{tag}_mm'] = float(np.percentile(both, 95))
+        row[f'{prefix}max_{tag}_mm'] = float(both.max())
+    for stat in ('mean', 'hd95', 'max'):
+        row[f'{prefix}{stat}_mm'] = 0.5 * (row[f'{prefix}{stat}_lh_mm']
+                                          + row[f'{prefix}{stat}_rh_mm'])
+    return row
+
+
+def mesh_metrics(verts_t, verts_np, faces, n_lh, flows, affine, subject_dir, seg_filename,
+                 push, n_iter=500, alpha=0.5, flow_inv=None, parity=None, all_pushes=False,
+                 self_int=False):
     """Push the template mesh with the already-computed flows and score it against
     the subject's own white surface. Returns {} when the subject has no surfaces."""
     ref_path = ref_for(Path(subject_dir) / seg_filename)
     if not Path(ref_path).is_file():
         return {}
     ref = nib.load(ref_path)
-    gt_v, _ = load_subject_white(subject_dir, ref)
+    gt_v, _, gt_n_lh = load_subject_white(subject_dir, ref)
     if gt_v is None:
         return {}
 
@@ -103,13 +158,23 @@ def mesh_metrics(verts_t, verts_np, faces, flows, affine, subject_dir, seg_filen
     res_mm = p['inv_residual_norm'] * mm
 
     gt_w, w = norm_to_world(gt_v, ref), norm_to_world(v, ref)
+    per_hemi = sym_dist(w, gt_w, n_lh, gt_n_lh)
+    m2g = np.concatenate([h[0] for h in per_hemi])
+    g2m = np.concatenate([h[1] for h in per_hemi])
+    # The old hemisphere-blind match, kept as a column so the size of the bias it
+    # introduced is on the record rather than argued about.
     tree = cKDTree(gt_w)
-    m2g = tree.query(w)[0]
-    g2m = cKDTree(w).query(gt_w)[0]
-    both = np.concatenate([m2g, g2m])
+    joined = np.concatenate([tree.query(w)[0], cKDTree(w).query(gt_w)[0]])
 
     extra = {'svf_parity_max': p['svf_parity']}
-    if all_pushes:                                   # diagnostic: score every mode
+    if self_int:
+        # The topology deliverable: does the pushed surface pass through itself?
+        # Scored in world mm so the broadphase cell size is the same scale as the
+        # template baseline printed once in main().
+        si, _ = self_intersections(w, faces, 'pushed')
+        extra.update({k: si[k] for k in ('si_faces', 'si_faces_pct', 'si_pairs',
+                                         'si_clusters', 'si_largest')})
+    if all_pushes:                                # diagnostic: score every mode
         for mode, mv in p['pushes'].items():
             if mode == push:
                 continue
@@ -117,12 +182,16 @@ def mesh_metrics(verts_t, verts_np, faces, flows, affine, subject_dir, seg_filen
             mb = np.concatenate([tree.query(mw)[0], cKDTree(mw).query(gt_w)[0]])
             extra[f'{mode}_sym_mean_mm'] = float(mb.mean())
             extra[f'{mode}_flip_pct'] = triangle_flip_fraction(verts_np, mv, faces)
+    und = sym_dist(norm_to_world(verts_np, ref), gt_w, n_lh, gt_n_lh)
     return {**extra,
-        'sym_mean_mm': float(both.mean()),
-        'sym_hd95_mm': float(np.percentile(both, 95)),
+        # sym_{mean,hd95,max}_mm = mean of the lh and rh scores; the per-hemisphere
+        # numbers they average are kept alongside.
+        **hemi_scores(per_hemi, 'sym_'),
+        **hemi_scores(und, 'undeformed_'),
+        'sym_mean_mm_hemi_blind': float(joined.mean()),
+        'sym_hd95_mm_hemi_blind': float(np.percentile(joined, 95)),
         'mesh_to_gt_mm': float(m2g.mean()),
         'gt_to_mesh_mm': float(g2m.mean()),
-        'undeformed_mean_mm': float(tree.query(norm_to_world(verts_np, ref))[0].mean()),
         # flip vs the raw template includes the affine; vs the aligned verts
         # isolates the dense inverse. A near-identity affine makes them equal —
         # if they differ, the affine itself is reversing triangles.
@@ -180,15 +249,33 @@ def main():
                          'were solver noise, not the model.')
     ap.add_argument('--inv_alpha', type=float, default=0.5, help='fixed-point damping')
     ap.add_argument('--no_mesh', action='store_true', help='voxel metrics only (much faster)')
+    ap.add_argument('--self_int', action='store_true',
+                    help='also count self-intersecting faces of the pushed mesh (the '
+                         'topology deliverable). ~10-20 s/subject on a 655k-face mesh; '
+                         'the un-pushed template baseline is scored once for subtraction')
     ap.add_argument('--template_surf', nargs=2, metavar=('LH', 'RH'), default=None)
     args = ap.parse_args()
+
+    # A config name is relative to the S-RegNET dir, not to wherever this was
+    # invoked from, so `python utils/evaluate_all.py` and `cd utils && python
+    # evaluate_all.py` resolve the same file.
+    cfg_path = Path(args.config or 'config.yaml').expanduser()
+    if not cfg_path.is_file() and not cfg_path.is_absolute():
+        cfg_path = _ROOT / cfg_path
+    args.config = str(cfg_path)
 
     cfg = load_config(args.config)
     ckpt = resolve_checkpoint(args.model, cfg)
     use_affine = detect_affine(ckpt) if args.affine == 'auto' else args.affine == 'on'
     out = Path(args.output_dir).expanduser() if args.output_dir \
         else Path(ckpt).parent.parent / 'metrics'
-    out.mkdir(parents=True, exist_ok=True)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        # The default lands next to the checkpoint, which is often someone else's
+        # run dir on a shared box. Say so instead of dying on a bare errno.
+        raise SystemExit(f"[eval] cannot write {out} — the run dir belongs to another "
+                         f"user. Pass --output_dir <a dir you own>.")
     write_git_sha(out)
 
     print(f"[eval] checkpoint = {ckpt}")
@@ -199,12 +286,22 @@ def main():
     d = cfg['data']
     template_subject = Path(d['template_seg_path']).parent.name
 
-    verts_t = verts_np = faces = None
+    verts_t = verts_np = faces = n_lh = None
+    template_si = None
     if not args.no_mesh:
         verts_np, faces, n_lh = load_template_mesh(cfg, args.template_surf)
         verts_t = torch.tensor(verts_np, dtype=torch.float32, device=ctx['device'])
         print(f"[eval] template mesh {len(verts_np):,} verts ({n_lh:,} lh) | "
               f"{len(faces):,} faces", flush=True)
+        if args.self_int:
+            # Same for every subject, so score it once — it is the floor the warp
+            # adds to, and 0 here is what the repaired template is supposed to give.
+            tpl_ref = nib.load(ref_for(d['template_seg_path']))
+            template_si = self_intersections(norm_to_world(verts_np, tpl_ref), faces,
+                                            f'template {template_subject}')[0]
+            print(f"[eval] template self-int {template_si['si_faces']} faces "
+                  f"({template_si['si_faces_pct']:.4f}%), {template_si['si_clusters']} patches",
+                  flush=True)
 
     splits = {'val': d['val_txt'], 'train': d['train_txt']}
     if args.split != 'both':
@@ -236,11 +333,12 @@ def main():
                 row.update(vox)
                 if not args.no_mesh:
                     flow_inv, _aff, parity = svf_inverse(ctx, sample_seg)
-                    row.update(mesh_metrics(verts_t, verts_np, faces, flows, affine,
+                    row.update(mesh_metrics(verts_t, verts_np, faces, n_lh, flows, affine,
                                             subject_dir, d['seg_filename'], args.push,
                                             args.inv_iter, args.inv_alpha,
                                             flow_inv=flow_inv, parity=parity,
-                                            all_pushes=args.all_pushes))
+                                            all_pushes=args.all_pushes,
+                                            self_int=args.self_int))
 
                 if fh is None:                          # header from the first row
                     fh = open(csv_path, 'w', newline='')
@@ -258,8 +356,12 @@ def main():
                 msg = (f"[eval] {len(rows):4d} {name:>20s} [{split}] WM {row['dice_wm']:.4f} | "
                        f"fg {row['dice_fg_mean']:.4f} | fold {row['folding_pct']:.4f}%")
                 if 'sym_mean_mm' in row:
-                    msg += (f" | mesh {row['sym_mean_mm']:6.2f} mm (undef "
-                            f"{row['undeformed_mean_mm']:6.2f}) | flip {row['flip_pct']:.4f}%")
+                    msg += (f" | mesh {row['sym_mean_mm']:5.2f} mm | hd95 "
+                            f"{row['sym_hd95_mm']:5.2f} (lh {row['sym_hd95_lh_mm']:5.2f} / "
+                            f"rh {row['sym_hd95_rh_mm']:5.2f}) | undef "
+                            f"{row['undeformed_mean_mm']:5.2f}")
+                    if 'si_faces_pct' in row:
+                        msg += f" | self-int {row['si_faces_pct']:.4f}%"
                 elif not args.no_mesh:
                     msg += " | mesh: no GT surface"
                 print(msg, flush=True)
@@ -272,6 +374,8 @@ def main():
 
     summary = {'checkpoint': ckpt, 'affine': use_affine, 'push': args.push,
                'mesh': not args.no_mesh, 'template_subject_excluded': template_subject,
+               'template_mesh': args.template_surf or cfg['data'].get('template_wm_mesh_path'),
+               'template_self_int': template_si,
                'n_subjects': len(rows), 'n_skipped': skipped}
     for split in splits:
         sub = [r for r in rows if r['split'] == split]

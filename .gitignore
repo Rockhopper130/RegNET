@@ -79,7 +79,7 @@ mlruns/
 *.jsonl
 dump/
 
-# Visualization outputs
+# Outputs
 *.png
 *.jpg
 *.jpeg
@@ -89,6 +89,10 @@ dump/
 figures/
 plots/
 visualizations/
+
+*.csv
+*.ply
+*.txt
 
 # Temporary files
 *.tmp

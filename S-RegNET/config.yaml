@@ -13,20 +13,39 @@ data:
   # Training and validation data lists (text files; one path per line, each
   # pointing at the seg .npy of one subject — the dataset loader infers the
   # subject directory from the file path).
-  train_txt: "/shared/home/v_mahith_reddy/RegNET/S-RegNET/train.txt"
-  val_txt:   "/shared/home/v_mahith_reddy/RegNET/S-RegNET/val.txt"
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
 
   # Template subject seg (used as moving image for every registration).
-  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_complete/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
+
+  # Template WM mesh, REPAIRED. FreeSurfer's own 0406 ?h.white self-intersects in
+  # 660 faces / 0.1007% / 47 patches before any warp — about a fifth of the ~0.53%
+  # measured on a pushed mesh. utils/repair_template_mesh.py relaxes those patches
+  # to zero crossings by moving vertices only (faces untouched, so V-E+F and the
+  # genus are unchanged); 1,950 verts moved, median 0.16 mm, 72% of it tangential.
+  # Comment this out to fall back to the raw /meshes/ sibling, which is defective.
+  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
 
   # File naming inside each subject directory.
+  #   seg_filename       — the SUPERVISION TARGET. Every loss term scores against
+  #                        this one: forward Dice/CE, the reverse branch, and the
+  #                        λ prior.
+  #   input_seg_filename — the network's 2nd INPUT. Point it at the SynthSeg
+  #                        one-hot to train the deployment condition (SynthSeg in,
+  #                        GT supervision) so the flow learns to denoise its input
+  #                        rather than reproduce it. null reuses seg_filename,
+  #                        i.e. the historical GT-in/GT-out setup.
   seg_filename: "seg4_onehot.npy"
+  input_seg_filename: "synthseg_onehot_v1.npy"
 
 # -----------------------------------------------------------------------------
 # Output Configuration
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/shared/scratch/0/home/v_mahith_reddy/regnet_training_exp6"
+  # Runs land in <base_dir>/<YYYYMMDD_HHMMSS>/. Own this path — the previous
+  # value pointed at v_mahith_reddy's scratch.
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/synthseg_input"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -84,8 +103,8 @@ loss:
   class_weights: [0.1, 1.0, 1.0, 5.0, 1.0]
 
   # Geometric regularization
-  bending:       0.05         # second-order smoothness
-  jacobian:      0.4          # anti-folding; linear-neg + top-K + pre-fold barrier
+  bending:       0.02          # second-order smoothness
+  jacobian:      0.15          # anti-folding; linear-neg + top-K + pre-fold barrier
   displacement:  0.01          # penalises large per-voxel displacements
 
   # Lambda-based adaptive regularization
@@ -93,9 +112,6 @@ loss:
   #   prior:      mean( (λ - target)² / (2σ²) )    with target = 1 - dilated_boundary(sample_seg), σ=0.3
   lambda_smoothness: 0.05
   lambda_prior:      0.05
-
-  # Cycle consistency
-  cycle:         0.1
 
   # Affine regularization (only active when affine.enabled: true)
   affine_reg:    0.01
@@ -110,7 +126,7 @@ seed: 42
 # Device Configuration
 # -----------------------------------------------------------------------------
 device:
-  gpu: "cuda:0"
+  gpu: "cuda:1"
   cudnn_benchmark: true
 
 # -----------------------------------------------------------------------------
