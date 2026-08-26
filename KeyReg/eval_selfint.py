@@ -1,4 +1,14 @@
-"""Measure surface self-intersection (triangle-flip %) of the warped WM surface
+"""DEPRECATED -- use eval_selfint_mesh.py instead.
+
+This script pushes template mesh vertices with `v_new = vn - d_at`, which is only
+the FIRST-ORDER approximation of the inverse of the pull field. Its own error
+flips triangles, overstating self-intersection by roughly 8x (it reports 1.14% for
+SVF-E full, where the exact SVF inverse gives 0.1083%). Kept only to explain the
+numbers already recorded in results/selfint.log.
+
+Original docstring follows.
+
+Measure surface self-intersection (triangle-flip %) of the warped WM surface
 for the SVF models. Extract template WM surface via marching cubes, push it by
 each model's deformation for every val subject, count orientation-flipped
 (self-intersecting) triangles."""
