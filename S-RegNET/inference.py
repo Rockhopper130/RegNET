@@ -42,9 +42,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-from matplotlib.lines import Line2D
 
 from git_provenance import write_git_sha
+from label_mapping import LABEL_MAPPING, remap_to_5class
 from model import SegRegistrationNet, SpatialTransformer
 from losses import (
     dice_loss, cross_entropy_loss,
@@ -66,19 +66,6 @@ def load_config(config_path=None):
         return yaml.safe_load(f)
 
 
-# FreeSurfer label → 5-class remapping (Background, Cortex, Subcortical GM,
-# White Matter, CSF). Used when --input_seg is a .nii.gz integer-label
-# volume; if the user passes a pre-converted .npy one-hot, this is skipped.
-LABEL_MAPPING = {
-    0: 0, 24: 0,
-    3: 1, 42: 1,
-    10: 2, 49: 2, 11: 3, 50: 2, 12: 2, 51: 2, 13: 2, 52: 2,
-    17: 2, 53: 2, 18: 2, 54: 2, 26: 2, 58: 2, 60: 2, 8: 2, 47: 2,
-    2: 3, 41: 3, 7: 3, 46: 3, 16: 3, 28: 3,
-    4: 4, 43: 4, 5: 4, 44: 4, 14: 4, 15: 4,
-}
-
-
 def load_seg_input(path, target_size, num_classes=5):
     """
     Load a sample seg from disk. Supports:
@@ -98,9 +85,7 @@ def load_seg_input(path, target_size, num_classes=5):
     else:
         img = nib.load(path)
         data = img.get_fdata().astype(np.int64)
-        remapped = np.zeros_like(data)
-        for src, dst in LABEL_MAPPING.items():
-            remapped[data == src] = dst
+        remapped = remap_to_5class(data)
         seg_tensor = torch.tensor(remapped)
         seg = F.one_hot(seg_tensor.long(), num_classes).permute(3, 0, 1, 2).float()
         nifti_affine = img.affine
@@ -257,58 +242,6 @@ def plot_comparison(template_seg, sample_seg, warped_seg, save_path):
     plt.close(fig)
 
 
-def plot_contour_overlay(template_seg, sample_seg, warped_seg, save_path, target_class=3):
-    """
-    Plots the target mask as a filled white region on a black background,
-    with overlaid contours for template, ground truth, and deformed template.
-    target_class=3 corresponds to White Matter in LABEL_MAPPING.
-    """
-    t_labels = template_seg.squeeze().argmax(dim=0).cpu().numpy()
-    s_labels = sample_seg.squeeze().argmax(dim=0).cpu().numpy()
-    w_labels = warped_seg.squeeze().argmax(dim=0).cpu().numpy()
-
-    t_mask = (t_labels == target_class).astype(np.float32)
-    s_mask = (s_labels == target_class).astype(np.float32)
-    w_mask = (w_labels == target_class).astype(np.float32)
-
-    D, H, W = t_mask.shape
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6), facecolor='#f5f5f0')
-
-    views = [
-        ('axial (z)',   lambda v: v[D // 2, :, :], D // 2, D),
-        ('coronal (y)', lambda v: v[:, H // 2, :], H // 2, H),
-        ('sagittal (x)', lambda v: v[:, :, W // 2], W // 2, W),
-    ]
-
-    for ax, (view_name, getter, slice_idx, max_idx) in zip(axes, views):
-        ax.set_facecolor('black')
-        bg = getter(s_mask)
-        ax.imshow(bg, cmap='gray', interpolation='none', vmin=0, vmax=1)
-
-        ax.contour(getter(t_mask), levels=[0.5], colors=['#FFC000'], linewidths=1.5)
-        ax.contour(getter(s_mask), levels=[0.5], colors=['#32CD32'], linewidths=1.5)
-        ax.contour(getter(w_mask), levels=[0.5], colors=['#00BFFF'], linewidths=1.5)
-
-        ax.set_title(f'{view_name} @ {slice_idx} / {max_idx-1}')
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    custom_lines = [
-        Line2D([0], [0], color='#FFC000', lw=2),
-        Line2D([0], [0], color='#32CD32', lw=2),
-        Line2D([0], [0], color='#00BFFF', lw=2)
-    ]
-    axes[0].legend(
-        custom_lines,
-        ['template (undeformed)', 'GT WM (FreeSurfer)', 'deformed template'],
-        loc='lower right', facecolor='gray', edgecolor='black', framealpha=0.9
-    )
-
-    plt.subplots_adjust(wspace=0.05)
-    plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor())
-    plt.close(fig)
-
-
 def plot_deformation_field(flow, save_path):
     """Magnitude (3 views) + per-axis component maps at axial mid-slice."""
     D, H, W = flow.shape[1:]
@@ -405,7 +338,14 @@ def setup_inference(checkpoint_path, config_path=None, device='cuda:0',
 
     if verbose:
         print("Loading model...")
-    model = SegRegistrationNet(target_size=target_size, seg_channels=num_classes, use_affine=use_affine).to(dev)
+    tcfg = cfg.get('transform', {})
+    model = SegRegistrationNet(
+        seg_channels=num_classes, use_affine=use_affine,
+        cp_spacing=tcfg.get('cp_spacing', 8),
+        n_stages=tcfg.get('n_stages', 1),
+        injectivity_k=tcfg.get('injectivity_k', 0.40),
+        target_size=target_size,
+    ).to(dev)
     stn = SpatialTransformer(size=target_size, device=dev).to(dev)
 
     ckpt = torch.load(checkpoint_path, map_location=dev, weights_only=False)
@@ -449,18 +389,22 @@ def run_inference_on_sample(ctx, input_seg_path, output_dir,
     sample_seg, nifti_affine = load_seg_input(input_seg_path, target_size, num_classes)
     sample_seg = sample_seg.unsqueeze(0).to(device)
 
-    # Forward + affine-then-flow warp replay (critical invariant; matches train.py:_warp_template)
-    flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
+    # Forward pass -> clamped control points, then the dense field. The STN
+    # volume warp below is the registration (warped_seg matches training); the
+    # genus-0 mesh is pushed via the field's numerical inverse elsewhere.
+    cps_list, affine_matrix = model(template_seg, sample_seg)
+    final_flow = model.dense_flow_from_cps(cps_list)
+    lambda_map = None
     if affine_matrix is not None:
         affine_grid = F.affine_grid(affine_matrix, template_seg.size(), align_corners=False)
         aligned_seg = F.grid_sample(template_seg, affine_grid, mode='bilinear',
                                     padding_mode='zeros', align_corners=False)
-        warped_seg = stn(aligned_seg, flow_fw)
+        warped_seg = stn(aligned_seg, final_flow)
     else:
-        warped_seg = stn(template_seg, flow_fw)
+        warped_seg = stn(template_seg, final_flow)
 
     losses = compute_all_losses(
-        warped_seg, sample_seg, flow_fw,
+        warped_seg, sample_seg, final_flow,
         lambda_map, affine_matrix, num_classes=num_classes,
     )
 
@@ -480,7 +424,7 @@ def run_inference_on_sample(ctx, input_seg_path, output_dir,
 
     plot_comparison(template_seg, sample_seg, warped_seg,
                     output_dir / 'comparison.png')
-    plot_deformation_field(flow_fw.squeeze(0).cpu().numpy(),
+    plot_deformation_field(final_flow.squeeze(0).cpu().numpy(),
                            output_dir / 'deformation_field.png')
     save_warped_nifti(warped_seg, nifti_affine,
                       str(output_dir / 'warped_seg.nii.gz'))
