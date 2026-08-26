@@ -1,0 +1,51 @@
+template WM surface: 141,971 verts, 287,154 faces
+
+=== SVF-E  (dir svf_E, epoch 214, 10 val subjects) ===
+  WM Dice: 0.9122 | logged folding: 0.0070%
+  triangle-flip %   approx  (v - disp(v), old eval_selfint.py) : 1.1139%
+  triangle-flip %   fixedpt (invert_to_sample, invertible-deform): 0.3404%
+  triangle-flip %   svfexact(integrate(-vel), ground truth)     : 0.1434%
+  residual of fixedpt   max 7.26e-02 | 1.2169% of verts over tol 0.001
+  residual of svfexact  max 6.40e-02 | 85.7759% of verts over tol 0.001
+     NOTE: the residual is what the fixed point explicitly minimises, so it cannot
+     adjudicate between the two -- read the percentile table and the surface
+     distance below instead. svfexact carries a smooth sub-voxel bias everywhere;
+     fixedpt is ~exact for >95% of vertices but strands ~1% by several voxels, and
+     those strays are what flip triangles.
+  triangle-flip %   fixedpt WARM-STARTED from svfexact           : 0.2399%
+  |fixedpt - svfexact| mean vertex gap: 2.71e-03 normalized (0.172 vox)
+  inverse residual, voxels        p50      p95      p99      max
+      fixedpt                    0.0000   0.0000   0.7709   4.6111
+      svfexact                   0.1501   0.8144   1.6092   4.0639
+      warm                       0.0000   0.0000   0.7978   4.5574
+  mean distance from pushed mesh to the SUBJECT's own WM isosurface (mm)
+      -- independent of the residual metric; lower = the map is genuinely better
+      approx                   1.6314 mm
+      fixedpt                  1.2658 mm
+      svfexact                 1.2532 mm
+      warm                     1.2653 mm
+
+=== SVF-F  (dir svf_F, epoch 214, 10 val subjects) ===
+  WM Dice: 0.8532 | logged folding: 0.0006%
+  triangle-flip %   approx  (v - disp(v), old eval_selfint.py) : 0.1565%
+  triangle-flip %   fixedpt (invert_to_sample, invertible-deform): 0.0964%
+  triangle-flip %   svfexact(integrate(-vel), ground truth)     : 0.0111%
+  residual of fixedpt   max 4.44e-02 | 0.3912% of verts over tol 0.001
+  residual of svfexact  max 4.17e-02 | 53.3052% of verts over tol 0.001
+     NOTE: the residual is what the fixed point explicitly minimises, so it cannot
+     adjudicate between the two -- read the percentile table and the surface
+     distance below instead. svfexact carries a smooth sub-voxel bias everywhere;
+     fixedpt is ~exact for >95% of vertices but strands ~1% by several voxels, and
+     those strays are what flip triangles.
+  triangle-flip %   fixedpt WARM-STARTED from svfexact           : 0.0545%
+  |fixedpt - svfexact| mean vertex gap: 1.40e-03 normalized (0.089 vox)
+  inverse residual, voxels        p50      p95      p99      max
+      fixedpt                    0.0000   0.0000   0.0149   2.8163
+      svfexact                   0.0672   0.4467   0.9680   2.6466
+      warm                       0.0000   0.0000   0.0194   2.8789
+  mean distance from pushed mesh to the SUBJECT's own WM isosurface (mm)
+      -- independent of the residual metric; lower = the map is genuinely better
+      approx                   1.6989 mm
+      fixedpt                  1.4522 mm
+      svfexact                 1.4426 mm
+      warm                     1.4516 mm
