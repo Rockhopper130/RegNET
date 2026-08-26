@@ -6,8 +6,8 @@ Deformable registration for brain imaging.
 
 ## The final model: KeyReg SVF-E (full corpus)
 
-**Everything current lives in [`KeyReg/`](KeyReg/). The other folders are earlier
-experiments, kept for provenance — see [Project history](#project-history).**
+**The current model is [`KeyReg/`](KeyReg/). Everything else has been moved to
+[`archive/`](archive/) — see [Project history](#project-history).**
 
 A keypoint-guided **diffeomorphic** registration network. A single full-resolution
 stationary velocity field, produced by a U-Net conditioned on the moving/fixed
@@ -61,12 +61,12 @@ folding, ~75× SVF-E, on the 40/10 subset only.
 
 ## Project history
 
-Earlier pipelines, superseded by `KeyReg/`. Each still has its own README, model,
-losses, training loop and `config.yaml`.
-
 | Folder | Input | Status |
 |---|---|---|
-| [`KeyReg/`](KeyReg/) | Segmentation | **Current.** Keypoint-guided diffeomorphic SVF. |
-| [`S-RegNET/`](S-RegNET/) | Segmentation | Superseded. Seg-only registration, B-spline FFD cascade, genus-0 WM mesh deliverable. |
-| [`S-RegNET_exp4/`](S-RegNET_exp4/) | Segmentation | Superseded. Experiment-4 variant of S-RegNET. |
-| [`M-RegNET/`](M-RegNET/) | MRI | Superseded. Dense field on MRI, seg-guided attention. |
+| [`KeyReg/`](KeyReg/) | Segmentation | **Current — this is the model.** Keypoint-guided diffeomorphic SVF. |
+| [`archive/S-RegNET/`](archive/S-RegNET/) | Segmentation | Superseded. Seg-only registration, B-spline FFD cascade, genus-0 WM mesh deliverable. |
+| [`archive/S-RegNET_exp4/`](archive/S-RegNET_exp4/) | Segmentation | Superseded. Experiment-4 variant of S-RegNET. |
+| [`archive/M-RegNET/`](archive/M-RegNET/) | MRI | Superseded. Dense field on MRI, seg-guided attention. |
+
+Each archived pipeline still has its own README, model, losses, training loop and
+`config.yaml`, and should still run — only the paths have changed.
