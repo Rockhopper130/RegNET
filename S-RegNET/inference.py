@@ -405,7 +405,9 @@ def setup_inference(checkpoint_path, config_path=None, device='cuda:0',
 
     if verbose:
         print("Loading model...")
-    model = SegRegistrationNet(target_size=target_size, seg_channels=num_classes, use_affine=use_affine).to(dev)
+    model = SegRegistrationNet(target_size=target_size, seg_channels=num_classes,
+                               use_affine=use_affine,
+                               head=cfg['model'].get('head', 'default')).to(dev)
     stn = SpatialTransformer(size=target_size, device=dev).to(dev)
 
     ckpt = torch.load(checkpoint_path, map_location=dev, weights_only=False)

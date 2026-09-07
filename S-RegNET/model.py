@@ -82,6 +82,52 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 
+class BandLimitedHead(nn.Module):
+    """
+    Two-branch band-limited velocity head —
+    the per-subject "combo" optimizer's function class, built into the net:
+
+        v = lp96(base_conv(d1)) + up(res_conv(d2))
+
+      base     1x1 conv on the final decoder features (128³), through a FIXED
+               parameterless trilinear down-up filter at 96³. Content below
+               wavelength ~2.67 voxels — the band that carries most of the mesh
+               self-intersection — cannot be emitted at all, on any input.
+      residual 1x1 conv on the second decoder level (dec2, already 64³),
+               ZERO-initialised and trilinearly upsampled: the learned stand-in
+               for the combo's optimized 64³ delta, which also starts at zero.
+
+    Both resamplings use mode='trilinear', align_corners=False, matching
+    bandlimit_opt/instance_opt_bandlimited.py's lowpass() and
+    build_velocities() exactly — the distillation targets were built with those
+    two operators, so any other choice biases the regression.
+    """
+    def __init__(self, base_channels=32, res_channels=64, lowpass_size=96):
+        super().__init__()
+        self.lowpass_size = lowpass_size
+
+        # Near-zero init like the old flow head, so v ≈ 0 → warp ≈ identity.
+        self.base_conv = nn.Conv3d(base_channels, 3, kernel_size=1)
+        nn.init.normal_(self.base_conv.weight, 0, 1e-3)
+        nn.init.zeros_(self.base_conv.bias)
+
+        # Exactly zero: the combo's delta starts at zero, and a warm-started
+        # net must reproduce the low-passed checkpoint before it learns.
+        self.res_conv = nn.Conv3d(res_channels, 3, kernel_size=1)
+        nn.init.zeros_(self.res_conv.weight)
+        nn.init.zeros_(self.res_conv.bias)
+
+    def forward(self, d1, d2):
+        size = d1.shape[2:]
+        d = self.lowpass_size
+        base = F.interpolate(self.base_conv(d1), size=(d, d, d),
+                             mode='trilinear', align_corners=False)
+        base = F.interpolate(base, size=size, mode='trilinear', align_corners=False)
+        res = F.interpolate(self.res_conv(d2), size=size,
+                            mode='trilinear', align_corners=False)
+        return base + res
+
+
 # =============================================================================
 # UNet (single-scale flow + lambda head)
 # =============================================================================
@@ -95,9 +141,14 @@ class UNet(nn.Module):
         initial warp is identity.
       - lambda head (Conv3d → Sigmoid → 1 channel) producing a per-voxel
         adaptive-smoothness weight in [0, 1].
+
+    head='bandlimited' swaps the flow head for BandLimitedHead, which emits a
+    single 3-channel band-limited velocity from dec1 + dec2 instead of the
+    6-channel (fw, rv) pair.
     """
-    def __init__(self, in_channels=10, out_channels=6):
+    def __init__(self, in_channels=10, out_channels=6, head='default'):
         super().__init__()
+        self.head = head
 
         # Encoder
         self.enc1 = ConvBlock(in_channels, 32)
@@ -120,9 +171,12 @@ class UNet(nn.Module):
         self.dec1 = ConvBlock(64, 32)
 
         # Flow head — near-zero init so initial flow ≈ 0 → warp starts at identity.
-        self.out_conv = nn.Conv3d(32, out_channels, kernel_size=1)
-        nn.init.normal_(self.out_conv.weight, 0, 1e-3)
-        nn.init.zeros_(self.out_conv.bias)
+        if head == 'bandlimited':
+            self.vel_head = BandLimitedHead(base_channels=32, res_channels=64)
+        else:
+            self.out_conv = nn.Conv3d(32, out_channels, kernel_size=1)
+            nn.init.normal_(self.out_conv.weight, 0, 1e-3)
+            nn.init.zeros_(self.out_conv.bias)
 
         # Lambda head — per-voxel adaptive-smoothness weight in [0, 1].
         #
@@ -164,9 +218,10 @@ class UNet(nn.Module):
         d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))
         d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
 
-        flow = self.out_conv(d1)
+        vel = (self.vel_head(d1, d2) if self.head == 'bandlimited'
+               else self.out_conv(d1))
         lambda_map = self.lambda_head(d1)
-        return flow, lambda_map
+        return vel, lambda_map
 
 
 # =============================================================================
@@ -239,17 +294,24 @@ class SegRegistrationNet(nn.Module):
         - lambda_map:    (B, 1, D, H, W) per-voxel adaptive-smoothness
                          weight (Sigmoid output, λ ∈ [0, 1])
         - affine_matrix: (B, 3, 4) or None — predicted affine
+
+    head='bandlimited' (config model.head) ties the two velocities: the UNet
+    emits a single band-limited v and the reverse field is -v, so exp(-v) is
+    the exact inverse of exp(+v) by construction — the property the mesh push
+    rides on. The default 6-channel head predicts the two fields independently.
     """
-    def __init__(self, target_size, seg_channels=5, use_affine=False):
+    def __init__(self, target_size, seg_channels=5, use_affine=False,
+                 head='default'):
         super().__init__()
         self.use_affine = use_affine
+        self.head = head
         if use_affine:
             self.affine_net = AffineNet(in_channels=2 * seg_channels)
 
-        self.unet = UNet(in_channels=2 * seg_channels, out_channels=6)
+        self.unet = UNet(in_channels=2 * seg_channels, out_channels=6, head=head)
         self.stn = SpatialTransformer(size=target_size)
 
-    def forward(self, template_seg, sample_seg):
+    def forward(self, template_seg, sample_seg, return_velocity=False):
         affine_matrix = None
 
         if self.use_affine:
@@ -262,16 +324,57 @@ class SegRegistrationNet(nn.Module):
 
         x = torch.cat([template_seg, sample_seg], dim=1)
         vel, lambda_map = self.unet(x)
-        vel_fw = vel[:, :3, ...]
-        vel_rv = vel[:, 3:, ...]
-        
+        if self.head == 'bandlimited':
+            vel_fw, vel_rv = vel, -vel          # tied: exp(-v) inverts exp(+v)
+        else:
+            vel_fw = vel[:, :3, ...]
+            vel_rv = vel[:, 3:, ...]
+
         flow_fw = vel_fw / (2 ** 7)
         flow_rv = vel_rv / (2 ** 7)
         for _ in range(7):
             flow_fw = flow_fw + self.stn(flow_fw, flow_fw)
             flow_rv = flow_rv + self.stn(flow_rv, flow_rv)
-            
+
+        # return_velocity exposes the raw UNet-scale forward velocity for the
+        # distillation regression term (losses.velocity_mse_loss); every other
+        # caller keeps the historical 4-tuple.
+        if return_velocity:
+            return flow_fw, flow_rv, lambda_map, affine_matrix, vel_fw
         return flow_fw, flow_rv, lambda_map, affine_matrix
+
+
+# =============================================================================
+# Warm start
+# =============================================================================
+
+def load_bandlimited_warm_start(model, state_dict):
+    """
+    Load an OLD 6-channel-head checkpoint into a head='bandlimited' model.
+
+    Trunk, lambda head and affine net load unchanged. `unet.out_conv` has no
+    counterpart: its FORWARD half is the velocity the distillation targets were
+    built from, so weight[:3]/bias[:3] become the base branch and the residual
+    branch keeps its zero init — at which point the net reproduces the
+    low-passed checkpoint. The reverse half is discarded; the tied head
+    derives it as -v.
+
+    Strict loading cannot survive that shape change, so the surgery is
+    explicit and anything else out of place is raised, not swallowed.
+    """
+    sd = dict(state_dict)
+    out_w = sd.pop('unet.out_conv.weight', None)
+    out_b = sd.pop('unet.out_conv.bias', None)
+    if out_w is not None:
+        sd['unet.vel_head.base_conv.weight'] = out_w[:3].clone()
+        sd['unet.vel_head.base_conv.bias'] = out_b[:3].clone()
+
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    missing = [k for k in missing if not k.startswith('unet.vel_head.res_conv')]
+    if missing or unexpected:
+        raise RuntimeError(
+            f"band-limited warm start: unexpected checkpoint layout — "
+            f"missing {missing}, unexpected {unexpected}")
 
 
 

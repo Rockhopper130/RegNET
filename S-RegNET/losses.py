@@ -18,6 +18,9 @@ Composite (sum of weighted terms; weights live in config.yaml -> loss):
       - lambda_prior:                anatomy-aware Gaussian pulling λ toward
                                      (1 - dilated_boundary(sample_seg))
 
+    Distillation regression (only active when pred_vel/target_vel are passed)
+      - vel_mse: MSE against the per-subject band-limited "combo" velocity
+
     (No cycle term — single-SVF model makes the inverse exact; see
     cycle_consistency_loss, kept only as a diagnostic.)
 
@@ -170,6 +173,27 @@ def displacement_loss(flow):
 
 
 # =============================================================================
+# Distillation Regression
+# =============================================================================
+
+def velocity_mse_loss(pred_vel, target_vel):
+    """
+    MSE between the predicted tied velocity and the per-subject distillation
+    target, both at raw UNet scale — i.e.
+    before the /2**7 of scaling-and-squaring.
+
+    On velocities, not on integrated flows: matching v matches the flow
+    exactly (exp is deterministic), while matching flows leaves v
+    underdetermined and lets high-frequency content hide; the gradient also
+    skips the 7 squaring steps, so it is cheaper and better conditioned.
+
+    fp32 regardless of AMP — the targets are fp32 and these velocities are
+    small enough that a half-precision square loses the signal.
+    """
+    return F.mse_loss(pred_vel.float(), target_vel.float())
+
+
+# =============================================================================
 # Lambda-based Adaptive Regularization (linear-λ + anatomy prior)
 # =============================================================================
 #
@@ -313,6 +337,7 @@ class SegRegistrationLoss(nn.Module):
       - dice, cross_entropy (symmetric)
       - bending, jacobian, displacement (symmetric)
       - lambda_smoothness, lambda_prior
+      - vel_mse      (active only when pred_vel and target_vel are not None)
       - affine_reg, affine_ortho  (active only when affine_matrix is not None)
 
     No cycle term: the model integrates a single velocity field both ways
@@ -336,7 +361,8 @@ class SegRegistrationLoss(nn.Module):
 
     def forward(self, warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
                 flow_fw, flow_rv, lambda_map,
-                affine_matrix=None, return_components=False):
+                affine_matrix=None, pred_vel=None, target_vel=None,
+                return_components=False):
         loss_dict = {}
 
         # Segmentation alignment (symmetric)
@@ -351,6 +377,12 @@ class SegRegistrationLoss(nn.Module):
         # Lambda-adaptive (linear-λ smoothness applied to both + anatomy prior)
         loss_dict['lambda_smoothness'] = lambda_weighted_smoothness(flow_fw, lambda_map) + lambda_weighted_smoothness(flow_rv, lambda_map)
         loss_dict['lambda_prior'] = lambda_prior_loss(lambda_map, sample_seg)
+
+        # Distillation regression (active only for subjects that have a target)
+        if pred_vel is not None and target_vel is not None:
+            loss_dict['vel_mse'] = velocity_mse_loss(pred_vel, target_vel)
+        else:
+            loss_dict['vel_mse'] = torch.tensor(0.0, device=flow_fw.device)
 
         # Affine
         if affine_matrix is not None:

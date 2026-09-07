@@ -12,6 +12,11 @@ against `sample_seg`. They are the same volume unless
 are training the deployment condition (SynthSeg in, GT supervision), which
 teaches the flow to denoise its input instead of reproducing it.
 
+Distillation (optional): set `data.target_vel_filename` and
+`model.head: bandlimited` and the run regresses the predicted tied velocity
+onto the per-subject band-limited "combo" velocity, with the affine branch
+frozen — see bandlimit_opt/config_distill.yaml.
+
 Evaluation: Dice on warped template seg vs sample seg (the GT target),
 plus per-voxel folding diagnostics via the Jacobian determinant.
 
@@ -39,7 +44,8 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 
-from model import SegRegistrationNet, SpatialTransformer
+from model import (SegRegistrationNet, SpatialTransformer,
+                   load_bandlimited_warm_start)
 from losses import SegRegistrationLoss, compute_dice_score, jacobian_det
 from get_data import SegDataset
 from git_provenance import write_git_sha
@@ -75,6 +81,9 @@ class Config:
         # Network input seg. None/empty -> reuse seg_filename, i.e. the
         # historical GT-in/GT-out setup.
         self.input_seg_filename = cfg['data'].get('input_seg_filename') or None
+        # Per-subject distillation target velocity. None/empty -> no vel_mse
+        # term, i.e. plain training.
+        self.target_vel_filename = cfg['data'].get('target_vel_filename') or None
 
         # Output
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -87,6 +96,9 @@ class Config:
         self.target_size = tuple(cfg['model']['target_size'])
         self.num_classes = cfg['model']['num_classes']
         self.seg_channels = cfg['model'].get('seg_channels', self.num_classes)
+        # 'default' = the 6-channel (fw, rv) flow head; 'bandlimited' = the
+        # tied two-branch band-limited head (model.BandLimitedHead).
+        self.head = cfg['model'].get('head', 'default')
 
         # Affine
         affine_cfg = cfg.get('affine', {})
@@ -337,18 +349,26 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
         template_seg = batch['template_seg'].to(device)
         sample_seg = batch['sample_seg'].to(device)      # supervision target
         input_seg = batch['input_seg'].to(device)        # what the net sees
+        # Distillation target: present only when data.target_vel_filename is
+        # set, and only for subjects that actually have the file.
+        target_vel = (batch['target_vel'].to(device)
+                      if 'target_vel' in batch and bool(batch['has_target_vel'].all())
+                      else None)
 
         optimizer.zero_grad()
 
         with torch.cuda.amp.autocast(enabled=config.use_amp):
-            flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, input_seg)
+            flow_fw, flow_rv, lambda_map, affine_matrix, pred_vel = model(
+                template_seg, input_seg, return_velocity=True)
             warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
             warped_seg_rv = _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn)
 
             loss, loss_dict = loss_fn(
                 warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
                 flow_fw, flow_rv, lambda_map,
-                affine_matrix=affine_matrix, return_components=True,
+                affine_matrix=affine_matrix,
+                pred_vel=pred_vel, target_vel=target_vel,
+                return_components=True,
             )
 
         # Backward + grad clip + step. unscale BEFORE clip — clip_grad_norm_
@@ -503,12 +523,17 @@ def main():
     logger.info(f"  net input      : {config.input_seg_filename or config.seg_filename}"
                 f"{'' if config.input_seg_filename else '  (same as target)'}")
     logger.info(f"  supervision on : {config.seg_filename}")
+    if config.target_vel_filename:
+        logger.info(f"  distill target : {config.target_vel_filename}  (train only)")
 
+    # The distillation targets exist for training subjects only — val is
+    # deliberately target-free so its Dice stays an honest held-out number.
     train_dataset = SegDataset(
         config.train_txt, config.template_seg_path,
         target_size=config.target_size,
         seg_filename=config.seg_filename,
         input_seg_filename=config.input_seg_filename,
+        target_vel_filename=config.target_vel_filename,
     )
     val_dataset = SegDataset(
         config.val_txt, config.template_seg_path,
@@ -537,11 +562,22 @@ def main():
     model = SegRegistrationNet(
         target_size=config.target_size,
         seg_channels=config.seg_channels, use_affine=config.use_affine,
+        head=config.head,
     ).to(device)
     stn = SpatialTransformer(size=config.target_size, device=device).to(device)
 
+    # Distillation: every target velocity lives in the space the warm-start
+    # checkpoint's affine put it in, so a drifting affine would move the space
+    # the regression targets are defined in.
+    if config.target_vel_filename and config.use_affine:
+        for p in model.affine_net.parameters():
+            p.requires_grad_(False)
+        config.loss_weights['affine_reg'] = 0.0
+        logger.info("Distillation mode: affine_net FROZEN, affine_reg weight 0")
+
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model parameters: {num_params:,}")
+    logger.info(f"Flow head: {config.head}")
     logger.info(f"Affine pre-alignment: {'ENABLED' if config.use_affine else 'DISABLED'}")
 
     loss_fn = SegRegistrationLoss(
@@ -568,11 +604,21 @@ def main():
         logger.info(f"Resuming from: {config.resume_from}")
         # weights_only=False: our checkpoints contain numpy scalars in metrics.
         checkpoint = torch.load(config.resume_from, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint['epoch'] + 1
-        best_dice = checkpoint.get('best_dice', 0.0)
-        logger.info(f"Resumed from epoch {start_epoch - 1}, best dice: {best_dice:.4f}")
+        state_dict = checkpoint['model_state_dict']
+        if config.head == 'bandlimited' and 'unet.out_conv.weight' in state_dict:
+            # Warm start, not a resume: the old 6-channel head is sliced into
+            # the band-limited base branch, so the optimizer state and the
+            # epoch counter of that run no longer apply.
+            load_bandlimited_warm_start(model, state_dict)
+            logger.info("Warm-started the band-limited head from the old "
+                        "6-channel out_conv (residual branch zero, optimizer "
+                        "state and epoch counter discarded)")
+        else:
+            model.load_state_dict(state_dict)
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_epoch = checkpoint['epoch'] + 1
+            best_dice = checkpoint.get('best_dice', 0.0)
+            logger.info(f"Resumed from epoch {start_epoch - 1}, best dice: {best_dice:.4f}")
 
     # ==========================================================================
     # Training Loop
