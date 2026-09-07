@@ -1,89 +1,220 @@
-# Unsupervised Segmentation Map Registration
+# S-RegNET — topology-correct white-matter surfaces from a SynthSeg segmentation
 
-This repository implements an unsupervised deep learning framework for registering a surface-derived segmentation template to a target segmentation volume. The model learns a 3D deformation field using volumetric similarity and smoothness constraints, without requiring paired training data. It supports multiple surface-aware loss functions and operates on medical datasets such as OASIS.
+A user gives us a white-matter segmentation from SynthSeg. It is topologically
+dirty: extra handles, islands, holes. We never build a mesh from it. Instead we
+keep one clean template (OASIS 0406, white surface repaired to zero
+self-intersections) and deform the template's segmentation until it matches the
+upload. The template mesh is then carried through the inverse of that
+deformation into the subject's space. The output is the subject's white-matter
+surface with the template's topology. Everything runs on a 128³ grid (~2 mm).
 
----
+The shared model is **distilled net + 50 refinement steps**:
 
-**Dataset**
+1. One forward pass of the distilled network → a velocity field `v`.
+2. 50 Adam steps fitting a coarse 64³ correction `δ` to this one subject → `v + up(δ)`. ~20 s on one GPU.
+3. Push the template mesh with `exp(−v)`; warp the template seg with `exp(+v)`.
 
-We use the [Neurite-OASIS](https://github.com/adalca/medical-datasets/blob/master/neurite-oasis.md) brain MRI dataset. The `.npz` files are preprocessed into one-hot encoded `.npy` volumes using `convert_one_hot.py`. Each one-hot volume has **5 channels**, corresponding to:  
-- Background  
-- Cortex  
-- Subcortical GM  
-- White Matter  
-- CSF
+| Method (n=10 val, SynthSeg in, scored vs GT) | WM Dice | self-int. faces | surface dist | cost/subject |
+|---|---|---|---|---|
+| Old SVF net (exp6), forward pass | 0.856 | 0.209 % | 1.145 mm | < 1 s |
+| Distilled net, forward pass | 0.842 | 0.022 % | 1.038 mm | < 1 s |
+| **Distilled net + 50 steps** | **0.877** | **0.063 %** | **0.973 mm** | ~20 s |
 
----
+## 1. Setup
 
-**Setup**
-
-```bash
-# Install PyTorch plus the scientific stack used across the scripts:
-pip install torch numpy nibabel scipy scikit-image matplotlib monai tqdm pyyaml
-```
-
----
-
-**Training**
-
-All paths and hyperparameters live in `config.yaml`; edit it rather than passing flags.
+On the lab cluster everything is in place:
 
 ```bash
-python train.py                      # uses config.yaml in this directory
-python train.py --config my.yaml     # use a custom config
+source ~/venv/bin/activate            # torch 2.8 + cu128, scipy, nibabel, pyyaml, matplotlib
+cd ~/code/seg-seg-reg/RegNET/S-RegNET # run every command from this directory
 ```
 
-The input to the model is constructed by concatenating the 5-channel template and 5-channel fixed map, resulting in a **10-channel input**. The U-Net is initialized with `in_channels=10`. Affine pre-alignment (`AffineNet`) is optional via `affine.enabled` in the config; when on, the warp is applied affine-first, then dense flow.
+Elsewhere: `pip install torch numpy scipy nibabel matplotlib pyyaml tqdm scikit-image`
+(scikit-image only for the topology tools).
 
----
+`config.yaml` is the single source of truth (paths, sizes, loss weights).
+Edit it; there are no training CLI flags. Diagnostic scripts take
+`--checkpoint/--model`, `--config`, `--output_dir`, `--device`.
 
-**File Overview**
+Rules that will save you a day:
 
-- `train.py`: Main training loop. Loads `config.yaml`, builds the model + `SpatialTransformer`, trains with validation, and saves checkpoints.
-- `model.py`: Network architecture — `AffineNet`, `UNet`, `SegRegistrationNet`, and a `SpatialTransformer` (trilinear sampling for the warp; the seg itself is resized with nearest-neighbor in the dataset).
-- `losses.py`: Atomic losses (`dice_loss`, `cross_entropy_loss`, `bending_energy_loss`, `jacobian_det_loss`, `displacement_loss`, lambda-adaptive smoothness, affine regularizers) plus the `SegRegistrationLoss` module that combines them.
-- `get_data.py`: Loads `.npy` one-hot maps and resizes them to `(128, 128, 128)` using **nearest-neighbor interpolation**.
-- `convert_one_hot.py`: Converts `.nii.gz` segmentations into 5-channel `.npy` format.
-- `random_deform.py`: Standalone script that applies random elastic deformations to a segmentation and visualizes the result (sanity-check / demo, run manually).
-- `git_provenance.py`: Stamps each run directory with the current git commit (flags a dirty tree).
-- `inference.py` / `compute_self_intersection.py` / `compare_synthseg_vs_gt.py`: standalone evaluation and diagnostic tools (run manually).
+- **Write every output under your own scratch** (`~/shared_scratch/...` =
+  `/shared/scratch/0/home/<you>/`). The plain home quota is tiny and a full
+  home breaks git and the file sync.
+- **Commit before a real run.** Every script stamps `GIT_SHA.txt` into its
+  output dir and flags a dirty tree. A dirty run cannot be reproduced.
+- `nvidia-smi` first; the box is shared. Pass `--device cuda:N` explicitly.
 
----
+## 2. Data
 
-**Loss Functions Used**
+Root: `OASIS=/shared/scratch/0/home/v_nishchay_nilabh/oasis_data`. One
+directory per subject:
 
-`train.py` uses the `SegRegistrationLoss` module from `losses.py`, weighted by `loss_weights` in `config.yaml`. It combines:
-- Dice Loss
-- Cross Entropy Loss
-- Bending Energy Loss
-- Jacobian Determinant Loss (prevents folding)
-- Displacement and lambda-adaptive smoothness
-- Affine regularizers (only when `affine.enabled`)
+```
+$OASIS/scans/OASIS_OAS1_0146_MR1/
+    seg4.nii.gz              GT 5-class seg (0 bg, 1 cortex, 2 subcortical GM, 3 WM, 4 CSF)
+    seg4_onehot.npy          (5, D, H, W) uint8 — the SUPERVISION target   ← convert_one_hot.py
+    synthseg_onehot_v1.npy   (5, D, H, W) uint8 — the network INPUT        ← convert_synthseg_one_hot.py
+    distill_vel_v1.npy       (3, 128, 128, 128) float32 — distillation target (train subjects only)
+$OASIS/meshes/OASIS_OAS1_0146_MR1/{lh,rh}.white.surf     FreeSurfer white surfaces (eval only)
+$OASIS/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz   the template mesh
+$OASIS/train.txt, val.txt    one seg4_onehot.npy path per line (330 / 82 subjects)
+```
 
----
-
-**Notes**
-
-- One fixed template is warped to match each subject's segmentation.
-- The `SpatialTransformer` performs dense warping using bilinear interpolation on tensors in normalized coordinates.
-- Label-preserving nearest-neighbor interpolation is used only during dataset resizing (`get_data.py`).
-- Be sure to adjust paths and GPU IDs in `train.py` as needed.
-
----
-
-**Logging**
-
-Training metrics are written to a timestamped run directory under `output.base_dir`
-(`checkpoints/` and `logs/`), and each run records its git commit via `git_provenance.py`.
-
----
-
-**Example Command**
+Regenerate from raw if you bring new subjects (each step writes next to the
+subject's files; the list files only need to name the subject directories):
 
 ```bash
-# Point config.yaml at your train/val lists and template, then:
-python train.py
+# GT seg -> one-hot
+python convert_one_hot.py --lists $OASIS/train.txt $OASIS/val.txt
+
+# SynthSeg (FreeSurfer labels) -> 5-class one-hot; label_mapping.py holds the remap
+python convert_synthseg_one_hot.py --lists $OASIS/train.txt $OASIS/val.txt \
+    --synthseg_dir $OASIS/oasis_synthseg/oasis_data_synthseg_version1 \
+    --synthseg_name norm_synthseg.nii.gz --out_name synthseg_onehot_v1.npy
+
+# template mesh: FreeSurfer's 0406 ?h.white self-intersects in 660 faces; this moves
+# vertices (never faces) until zero cross, and writes template_wm_mesh_repaired.npz
+python utils/repair_template_mesh.py --config config.yaml
 ```
 
----
+The template subject (0406) must not appear in train/val; the eval scripts skip
+it anyway. `template_seg_path` and `template_wm_mesh_path` in `config.yaml`
+point at it.
 
+## 3. Run the shared model
+
+Checkpoints (`RUNS=/shared/scratch/0/home/v_nishchay_nilabh/training_results`):
+
+| name | path | head |
+|---|---|---|
+| distilled (use this) | `$RUNS/distill_v1/20260824_051202/checkpoints/best_model.pth` | `bandlimited` (`bandlimit_opt/config_distill.yaml`) |
+| exp6 (old SVF net) | `$RUNS/mahith_experiment/20260801_083414/checkpoints/best_model.pth` | 6-channel (`config.yaml`) |
+
+Always pair a checkpoint with the config it was trained with: the config's
+`model.head` decides which network is built.
+
+**Step 1+2 — forward pass + 50 refinement steps** on the first 10 val subjects
+(add `--subjects OASIS_OAS1_0146_MR1,...` to pick):
+
+```bash
+OUT=~/shared_scratch/distill50_n10
+python bandlimit_opt/instance_opt_bandlimited.py \
+    --checkpoint $RUNS/distill_v1/20260824_051202 --config bandlimit_opt/config_distill.yaml \
+    --coarse_levels 64 --iters 50 --lowpass_init 96 --num_subjects 10 \
+    --output_dir $OUT --device cuda:0
+```
+
+Arms: `baseline` = forward pass only, `d64` = + 50 steps. Look at
+`metrics.json` → `arm_means.d64.wm_dice` (~0.877). `flows/<subj>_d64.npz`
+holds the final velocity; `figures/` the contour overlays.
+
+**Step 3 — push the template mesh and score it:**
+
+```bash
+python utils/push_optimized_mesh.py --probe_dir $OUT --config bandlimit_opt/config_distill.yaml \
+    --arms baseline,d64 --output_dir $OUT/mesh_eval --device cuda:0
+```
+
+`mesh_metrics.csv` has per subject × arm: `si_faces_pct` (self-intersecting
+faces, ~0.06 %), `sym_mean_mm` (distance to the subject's own white surface,
+~0.97 mm), `inverse_residual_vox`. `<subj>_d64_deformed.white.surf` is the
+deliverable — open it in freeview on the subject's `seg4.nii.gz`.
+
+Optional figures and the topology table (CPU):
+
+```bash
+python bandlimit_opt/render_deformed_mesh.py --config bandlimit_opt/config_distill.yaml \
+    --rows baseline=$OUT/mesh_eval:baseline,refined=$OUT/mesh_eval:d64 --output_dir $OUT/renders
+python utils/topology_before_after.py --mesh_eval_dir $OUT/mesh_eval --arm d64 \
+    --config bandlimit_opt/config_distill.yaml --output_dir $OUT/topology
+```
+
+Single-file inference (warped seg NIfTI + loss dump, no mesh):
+`python inference.py --input_seg <seg.npy> --checkpoint <best_model.pth> --config <its config> --output_dir <dir>`.
+Full voxel + mesh sweeps: `utils/evaluate_synthseg_input.py` (deployment
+condition) and `utils/evaluate_all.py` (every subject, `--self_int` for topology).
+
+## 4. Train it yourself
+
+Three stages, one GPU each. Stage A is ~1–2 days, B ~8 h, C ~5 h.
+
+**A. Baseline SVF net** — `config.yaml` as committed (SynthSeg in, GT
+supervision, affine on, 6-channel head, 200 epochs):
+
+```bash
+python train.py                        # -> output.base_dir/<YYYYMMDD_HHMMSS>/{checkpoints,logs}
+```
+
+Watch `logs/`: val Dice, `folding_pct`, per-term `loss_components.jsonl`.
+exp6 is a run of this stage.
+
+**B. Distillation targets** — run the 300-step band-limited fit once per
+training subject with the stage-A checkpoint and save the final velocity
+`v* = lp96(v_net) + up(δ*)` as `<subject>/distill_vel_v1.npy`. Resume-safe.
+
+```bash
+python bandlimit_opt/generate_distill_targets.py \
+    --checkpoint $RUNS/mahith_experiment/20260801_083414 --config config.yaml --device cuda:0
+```
+
+**C. Distilled net** — new head, warm start from the stage-A checkpoint, one
+extra loss term (`vel_mse`). `resume.checkpoint_path` in the config names the
+stage-A checkpoint; the affine branch is frozen automatically.
+
+```bash
+python train.py --config bandlimit_opt/config_distill.yaml
+```
+
+Every deviation from `config.yaml` is commented inside `config_distill.yaml`.
+Evaluate the result with section 3 (val subjects have no targets, so their
+numbers are honest).
+
+## 5. How the model works
+
+- **Input**: template one-hot (5 ch) ⊕ subject one-hot (5 ch) = 10 channels.
+  An `AffineNet` pre-aligns the template first; a 3D U-Net then predicts a
+  stationary velocity field and a per-voxel smoothness weight λ.
+- **Warp**: `φ = exp(v)` by scaling and squaring (`v/2⁷`, 7 self-compositions).
+  Order is always **affine, then dense flow**; every consumer replays both.
+- **Band-limited tied head** (`model.head: bandlimited`, the distilled net):
+  `v = lp96(base) + up(residual)`. `base` is a 1×1 conv at 128³ passed through a
+  fixed 128→96→128 trilinear resample (erases wavelengths < ~2.7 voxels — the
+  band that carried ~95 % of mesh self-intersection). `residual` is a zero-init
+  1×1 conv on the 64³ decoder level, upsampled. The reverse field is `−v`, so
+  `exp(−v)` — what the mesh rides — is the exact inverse of `exp(+v)`. The old
+  6-channel head predicted two independent fields that disagreed by ~4 voxels.
+- **Loss** (`config.yaml → loss`): Dice 0.8 + CE 0.2 (both directions),
+  bending 0.02, Jacobian anti-fold, displacement 0.01, λ-smoothness and
+  λ-prior 0.05, affine regulariser. Distillation adds
+  `300 · mean‖v − v*‖²` and lowers Jacobian to 0.005 (the never-trained tied
+  inverse starts with a huge raw Jacobian term; the regression is the main
+  anti-fold force).
+- **Refinement** (`instance_opt_bandlimited.py`): net, affine and λ frozen;
+  only a 64³ `δ` is optimised against the *input* (SynthSeg) seg with the
+  training loss minus `vel_mse`. 50 steps is the knee: 300 gains 0.005 mm and
+  doubles self-intersection.
+- **Topology by construction**: the mesh push moves vertices only; faces are
+  the template's, so handles/components are the template's for every subject.
+  Self-intersection is the one thing that can still fail — that is the metric.
+
+## 6. File map
+
+| file | role |
+|---|---|
+| `config.yaml` / `bandlimit_opt/config_distill.yaml` | baseline run / distilled run (source of truth) |
+| `model.py` | `AffineNet`, `UNet`, `BandLimitedHead`, `SegRegistrationNet`, `SpatialTransformer`, warm-start loader |
+| `losses.py` | Dice, CE, bending, Jacobian, displacement, λ terms, `vel_mse`; `SegRegistrationLoss` |
+| `get_data.py` | `SegDataset`: one-hot loading, nearest resize to 128³, optional `target_vel` |
+| `train.py` | training loop, AMP, warm-up cosine LR, checkpoints, provenance |
+| `inference.py` | single-subject inference; `setup_inference` is reused by every tool |
+| `convert_one_hot.py`, `convert_synthseg_one_hot.py`, `label_mapping.py` | data generation |
+| `bandlimit_opt/instance_opt_bandlimited.py` | the 50-step refinement (and the 300-step fit) |
+| `bandlimit_opt/generate_distill_targets.py` | distillation targets over `train.txt` |
+| `utils/push_optimized_mesh.py` | template mesh → subject space; self-int, flips, mm distance |
+| `bandlimit_opt/render_deformed_mesh.py` | 3D renders + slice overlays of pushed meshes |
+| `utils/topology_before_after.py` | handles/components: SynthSeg surface vs pushed mesh |
+| `utils/repair_template_mesh.py` | one-off template surface repair |
+| `utils/evaluate_all.py`, `utils/evaluate_synthseg_input.py` | full-split voxel + mesh evaluation |
+| `utils/visualize_run.py`, `utils/visualize_mesh.py`, `utils/mesh_flip_probe.py`, `utils/synthseg_topology_baseline.py`, `compute_self_intersection.py`, `compare_synthseg_vs_gt.py`, `random_deform.py` | older diagnostics, still runnable |
+| `git_provenance.py` | writes `GIT_SHA.txt` into every run dir |
