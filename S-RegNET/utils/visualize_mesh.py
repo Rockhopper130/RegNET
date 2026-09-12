@@ -59,8 +59,6 @@ from scipy.spatial import cKDTree
 import torch
 import torch.nn.functional as F
 
-from evaluate_all import sym_dist, hemi_scores
-
 
 import matplotlib
 matplotlib.use('Agg')
@@ -532,6 +530,8 @@ def main():
             if gt_v is not None:
                 gt = (gt_v, gt_f)
                 gt_w = norm_to_world(gt_v, ref)
+                from evaluate_all import sym_dist, hemi_scores
+
                 init_per_hemi = sym_dist(norm_to_world(verts_np, ref), gt_w, n_lh, gt_n_lh)
                 init_hemi_scores = hemi_scores(init_per_hemi, 'init_')
                 # Score every candidate push against the same GT surface.
