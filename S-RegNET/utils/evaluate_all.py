@@ -124,17 +124,20 @@ def sym_dist(mesh_w, gt_w, n_lh, gt_n_lh):
 
 
 def hemi_scores(per_hemi, prefix=''):
-    """lh and rh scored separately, then averaged — mean/hd95/max per hemisphere,
-    with the plain <prefix>{mean,hd95,max}_mm being the lh/rh average."""
+    """lh and rh scored separately, then pooled for the combined score."""
     row = {}
+    all_both = []
     for tag, (m2g, g2m) in zip(('lh', 'rh'), per_hemi):
         both = np.concatenate([m2g, g2m])
+        all_both.append(both)
         row[f'{prefix}mean_{tag}_mm'] = float(both.mean())
         row[f'{prefix}hd95_{tag}_mm'] = float(np.percentile(both, 95))
         row[f'{prefix}max_{tag}_mm'] = float(both.max())
-    for stat in ('mean', 'hd95', 'max'):
-        row[f'{prefix}{stat}_mm'] = 0.5 * (row[f'{prefix}{stat}_lh_mm']
-                                          + row[f'{prefix}{stat}_rh_mm'])
+    
+    combined = np.concatenate(all_both)
+    row[f'{prefix}mean_mm'] = float(combined.mean())
+    row[f'{prefix}hd95_mm'] = float(np.percentile(combined, 95))
+    row[f'{prefix}max_mm'] = float(combined.max())
     return row
 
 

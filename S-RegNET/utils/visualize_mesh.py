@@ -59,6 +59,9 @@ from scipy.spatial import cKDTree
 import torch
 import torch.nn.functional as F
 
+from evaluate_all import sym_dist, hemi_scores
+
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -525,23 +528,26 @@ def main():
             res_mm = float(p['inv_residual_norm'].mean() * mm)
             nonconv = float((p['inv_residual_norm'] * mm > 1.0).mean() * 100)
 
-            gt_v, gt_f, _gt_n_lh = load_subject_white(subject_dir, ref)
+            gt_v, gt_f, gt_n_lh = load_subject_white(subject_dir, ref)
             if gt_v is not None:
                 gt = (gt_v, gt_f)
                 gt_w = norm_to_world(gt_v, ref)
-                tree = cKDTree(gt_w)
-                init = tree.query(norm_to_world(verts_np, ref))[0]
+                init_per_hemi = sym_dist(norm_to_world(verts_np, ref), gt_w, n_lh, gt_n_lh)
+                init_hemi_scores = hemi_scores(init_per_hemi, 'init_')
                 # Score every candidate push against the same GT surface.
                 for mode, v in p['pushes'].items():
                     w = norm_to_world(v, ref)
-                    both = np.concatenate([tree.query(w)[0], cKDTree(w).query(gt_w)[0]])
+                    per_hemi = sym_dist(w, gt_w, n_lh, gt_n_lh)
+                    scores = hemi_scores(per_hemi, 'sym_')
                     per_mode[mode] = {
-                        'sym_mean_mm': float(both.mean()),
-                        'sym_hd95_mm': float(np.percentile(both, 95)),
+                        'sym_mean_mm': scores['sym_mean_mm'],
+                        'sym_hd95_mm': scores['sym_hd95_mm'],
                         'flip_pct': triangle_flip_fraction(verts_np, v, faces),
                     }
                     if mode == args.push:
-                        dist = {'both': both, 'init_mean': float(init.mean())}
+                        # Collect all directed distances into 'both' for visualization
+                        both = np.concatenate([d for h in per_hemi for d in h])
+                        dist = {'both': both, 'init_mean': init_hemi_scores['init_mean_mm']}
 
         gt_wm = (sample['sample_seg'].argmax(0).numpy() == WM_LABEL).astype(np.float32)
         # Yellow = the template as the UNet sees it (A^-1 applied), so the gap to
