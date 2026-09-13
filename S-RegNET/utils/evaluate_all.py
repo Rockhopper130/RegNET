@@ -123,27 +123,29 @@ def sym_dist(mesh_w, gt_w, n_lh, gt_n_lh):
     return out
 
 
-def hemi_scores(per_hemi, prefix=''):
-    """lh and rh scored separately, then pooled for the combined score."""
+def hemi_scores(per_hemi, prefix='', percentile=95):
+    """lh and rh scored separately, then pooled for the combined score.
+    percentile controls the tail metric: 95 -> HD95, 99 -> HD99, etc."""
+    p = int(percentile)
     row = {}
     all_both = []
     for tag, (m2g, g2m) in zip(('lh', 'rh'), per_hemi):
         both = np.concatenate([m2g, g2m])
         all_both.append(both)
         row[f'{prefix}mean_{tag}_mm'] = float(both.mean())
-        row[f'{prefix}hd95_{tag}_mm'] = float(np.percentile(both, 95))
+        row[f'{prefix}hd{p}_{tag}_mm'] = float(np.percentile(both, p))
         row[f'{prefix}max_{tag}_mm'] = float(both.max())
-    
+
     combined = np.concatenate(all_both)
     row[f'{prefix}mean_mm'] = float(combined.mean())
-    row[f'{prefix}hd95_mm'] = float(np.percentile(combined, 95))
+    row[f'{prefix}hd{p}_mm'] = float(np.percentile(combined, p))
     row[f'{prefix}max_mm'] = float(combined.max())
     return row
 
 
 def mesh_metrics(verts_t, verts_np, faces, n_lh, flows, affine, subject_dir, seg_filename,
                  push, n_iter=500, alpha=0.5, flow_inv=None, parity=None, all_pushes=False,
-                 self_int=False):
+                 self_int=False, percentile=95):
     """Push the template mesh with the already-computed flows and score it against
     the subject's own white surface. Returns {} when the subject has no surfaces."""
     ref_path = ref_for(Path(subject_dir) / seg_filename)
@@ -186,13 +188,13 @@ def mesh_metrics(verts_t, verts_np, faces, n_lh, flows, affine, subject_dir, seg
             extra[f'{mode}_sym_mean_mm'] = float(mb.mean())
             extra[f'{mode}_flip_pct'] = triangle_flip_fraction(verts_np, mv, faces)
     und = sym_dist(norm_to_world(verts_np, ref), gt_w, n_lh, gt_n_lh)
+    p = int(percentile)
     return {**extra,
-        # sym_{mean,hd95,max}_mm = mean of the lh and rh scores; the per-hemisphere
-        # numbers they average are kept alongside.
-        **hemi_scores(per_hemi, 'sym_'),
-        **hemi_scores(und, 'undeformed_'),
+        # sym_{mean,hdP,max}_mm = pooled lh+rh scores; per-hemisphere numbers kept alongside.
+        **hemi_scores(per_hemi, 'sym_', percentile=p),
+        **hemi_scores(und, 'undeformed_', percentile=p),
         'sym_mean_mm_hemi_blind': float(joined.mean()),
-        'sym_hd95_mm_hemi_blind': float(np.percentile(joined, 95)),
+        f'sym_hd{p}_mm_hemi_blind': float(np.percentile(joined, p)),
         'mesh_to_gt_mm': float(m2g.mean()),
         'gt_to_mesh_mm': float(g2m.mean()),
         # flip vs the raw template includes the affine; vs the aligned verts
@@ -256,6 +258,9 @@ def main():
                     help='also count self-intersecting faces of the pushed mesh (the '
                          'topology deliverable). ~10-20 s/subject on a 655k-face mesh; '
                          'the un-pushed template baseline is scored once for subtraction')
+    ap.add_argument('--hd_percentile', type=int, default=95, choices=range(90, 100),
+                    metavar='P', help='percentile for the Hausdorff-distance metric '
+                         '(90-99 inclusive; default 95 -> HD95)')
     ap.add_argument('--template_surf', nargs=2, metavar=('LH', 'RH'), default=None)
     args = ap.parse_args()
 
@@ -341,7 +346,8 @@ def main():
                                             args.inv_iter, args.inv_alpha,
                                             flow_inv=flow_inv, parity=parity,
                                             all_pushes=args.all_pushes,
-                                            self_int=args.self_int))
+                                            self_int=args.self_int,
+                                            percentile=args.hd_percentile))
 
                 if fh is None:                          # header from the first row
                     fh = open(csv_path, 'w', newline='')
@@ -356,12 +362,13 @@ def main():
                 fh.flush()                              # partial results survive a crash
                 rows.append(row)
 
+                p = args.hd_percentile
                 msg = (f"[eval] {len(rows):4d} {name:>20s} [{split}] WM {row['dice_wm']:.4f} | "
                        f"fg {row['dice_fg_mean']:.4f} | fold {row['folding_pct']:.4f}%")
                 if 'sym_mean_mm' in row:
-                    msg += (f" | mesh {row['sym_mean_mm']:5.2f} mm | hd95 "
-                            f"{row['sym_hd95_mm']:5.2f} (lh {row['sym_hd95_lh_mm']:5.2f} / "
-                            f"rh {row['sym_hd95_rh_mm']:5.2f}) | undef "
+                    msg += (f" | mesh {row['sym_mean_mm']:5.2f} mm | hd{p} "
+                            f"{row[f'sym_hd{p}_mm']:5.2f} (lh {row[f'sym_hd{p}_lh_mm']:5.2f} / "
+                            f"rh {row[f'sym_hd{p}_rh_mm']:5.2f}) | undef "
                             f"{row['undeformed_mean_mm']:5.2f}")
                     if 'si_faces_pct' in row:
                         msg += f" | self-int {row['si_faces_pct']:.4f}%"
