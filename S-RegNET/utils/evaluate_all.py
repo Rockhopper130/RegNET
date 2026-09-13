@@ -188,13 +188,13 @@ def mesh_metrics(verts_t, verts_np, faces, n_lh, flows, affine, subject_dir, seg
             extra[f'{mode}_sym_mean_mm'] = float(mb.mean())
             extra[f'{mode}_flip_pct'] = triangle_flip_fraction(verts_np, mv, faces)
     und = sym_dist(norm_to_world(verts_np, ref), gt_w, n_lh, gt_n_lh)
-    p = int(percentile)
+    pct = int(percentile)
     return {**extra,
         # sym_{mean,hdP,max}_mm = pooled lh+rh scores; per-hemisphere numbers kept alongside.
-        **hemi_scores(per_hemi, 'sym_', percentile=p),
-        **hemi_scores(und, 'undeformed_', percentile=p),
+        **hemi_scores(per_hemi, 'sym_', percentile=pct),
+        **hemi_scores(und, 'undeformed_', percentile=pct),
         'sym_mean_mm_hemi_blind': float(joined.mean()),
-        f'sym_hd{p}_mm_hemi_blind': float(np.percentile(joined, p)),
+        f'sym_hd{pct}_mm_hemi_blind': float(np.percentile(joined, pct)),
         'mesh_to_gt_mm': float(m2g.mean()),
         'gt_to_mesh_mm': float(g2m.mean()),
         # flip vs the raw template includes the affine; vs the aligned verts
