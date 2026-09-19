@@ -1,0 +1,14 @@
+template WM surface [marching cubes of template WM label]: 141,971 verts, 287,154 faces
+WARNING: skipped 1 paired subjects without seg4_onehot_clinical.npy:
+    OASIS_OAS1_0288_MR1
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_marching_cubes_clinical/mesh_svf_E_full_OASIS_OAS1_0374_MR1.png
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_marching_cubes_clinical/mesh_svf_E_full_OASIS_OAS1_0456_MR1.png
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_marching_cubes_clinical/mesh_svf_E_full_OASIS_OAS1_0415_MR1.png
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_marching_cubes_clinical/mesh_svf_E_full_OASIS_OAS1_0308_MR1.png
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_marching_cubes_clinical/mesh_svf_E_full_OASIS_OAS1_0397_MR1.png
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_marching_cubes_clinical/mesh_svf_E_full_OASIS_OAS1_0406_MR1.png
+
+=== SVF-E FULL (paired recon-all-clinical; marching-cubes meshes)  (dir svf_E_full, epoch 229, 82 val subjects) ===
+  template mesh source: marching cubes of template WM label
+  WM Dice: 0.7224 | checkpoint's stored GT-val folding: 0.0046%
+  triangle-flip %   svfexact(integrate(-vel), ground truth)     : 0.5314%

@@ -1,0 +1,12 @@
+template WM surface [marching cubes of template WM label]: 141,971 verts, 287,154 faces
+WARNING: skipped 1 paired subjects without seg4_onehot_clinical.npy:
+    OASIS_OAS1_0288_MR1
+
+=== SVF-E FULL (paired recon-all-clinical; marching cubes)  (dir svf_E_full, epoch 229, 82 val subjects) ===
+  template mesh source: marching cubes of template WM label
+  WM Dice: 0.7224 | checkpoint's stored GT-val folding: 0.0046%
+  triangle-flip %   svfexact(integrate(-vel), ground truth)     : 0.5314%
+  mean distance to the SUBJECT's own marching-cubes WM isosurface (mm)
+      -- physical RAS distance via aligned volume affine; 82 subjects; lower is better
+      template                 5.3415 mm
+      svfexact                 3.8468 mm

@@ -21,7 +21,7 @@ so the warp is a diffeomorphism by construction.
 | Checkpoint | `keyreg_runs/svf_E_full/best.pth` (epoch 229) |
 | **WM Dice** | **0.9111** |
 | **Folding** | **0.0046 %** of voxels with det(J) < 0 |
-| **Self-intersection** | **0.1083 %** of surface triangles flipped |
+| **Triangle-orientation flips** | **0.1083 %** on the marching-cubes template WM mesh in the 128^3 model grid |
 
 Train and evaluate:
 
@@ -40,19 +40,20 @@ Full numbers, the sweep that led here, and the metric definitions:
 
 `smooth_w 3000` buys the near-zero folding and clean surface, but it regularises
 hard. Measured against each subject's own WM surface, the deformed template mesh
-closes only **43 %** of the template→sample gap (2.290 mm → 1.298 mm):
+closes **43.6 %** of the template→sample gap (1.686 mm → 0.951 mm):
 
 | | mean distance to the sample's WM surface |
 |---|---|
-| template, undeformed | 2.290 mm |
-| **deformed template** | **1.298 mm** |
-| deformation reversed (control) | 2.955 mm |
+| template, undeformed | 1.686 mm |
+| **deformed template** | **0.951 mm** |
+| deformation reversed (control) | 2.224 mm |
 
 So the model aligns globally but does not follow individual gyri. WM Dice does not
 show this — it is dominated by the interior of the WM, not the boundary — which is
-why **self-intersection should always be quoted alongside gap closure**: a
+why **triangle-orientation flips should always be quoted alongside gap closure**: a
 deformation that barely moves is trivially flip-free. Reproduce with
-`python KeyReg/check_push_control.py`.
+`python KeyReg/check_push_control.py 83`. Distances are physical scanner-RAS
+millimetres computed through each aligned volume's affine.
 
 The higher-Dice end of the sweep (SVF-A, WM Dice 0.9652) trades this away: 0.5159 %
 folding, ~75× SVF-E, on the 40/10 subset only.

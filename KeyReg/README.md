@@ -7,7 +7,8 @@ The current model. See the [root README](../README.md) for headline numbers and
 
 **SVF-E on the full corpus** — `run_svfE_full.sh`, checkpoint
 `keyreg_runs/svf_E_full/best.pth` (epoch 229).
-WM Dice **0.9111** · folding **0.0046 %** · self-intersection **0.1083 %**.
+WM Dice **0.9111** · folding **0.0046 %** · triangle-orientation flips
+**0.1083 %** on the marching-cubes template WM mesh in the 128^3 model grid.
 
 ```bash
 ./runs/run_svfE_full.sh
@@ -29,23 +30,31 @@ the run on failure.
 
 | Script | Measures |
 |---|---|
-| `eval_selfint_mesh.py` | **Self-intersection** (triangle-flip %) of the warped WM surface, plus mesh figures. Use this one. |
-| `check_push_control.py` | **Gap closure** — how much of the template→sample surface distance the deformation actually removes. Quote alongside self-intersection. |
+| `eval_selfint_mesh.py` | **Triangle-orientation flips** of the warped WM surface, plus marching-cubes or FreeSurfer-mesh figures. Historically called “self-intersection”; it is not an exact triangle-triangle intersection test. |
+| `check_push_control.py` | **Gap closure** — how much of the template→sample surface distance the deformation removes, in physical RAS millimetres. |
 | `eval_fold.py` | Volumetric folding (det(J) < 0) and inference speed. |
 | `eval_selfint.py` | **Deprecated** — first-order mesh push, overstates self-intersection ~8×. Kept only to explain the older numbers in `results/selfint.log`. |
-| `reg_surf_to_neurite.py` | Rigid-fits FreeSurfer `lh/rh.white` onto the neurite-OASIS frame (needed only for `.surf`-based figures). |
+| `export_deformed_surfs.py` | Writes template, sample, and exact-SVF-deformed `lh/rh` meshes as native FreeSurfer `.surf` geometry. |
+| `reg_surf_to_neurite.py` | Rigid-fits older FreeSurfer surfaces made from a differently preprocessed scan. Do not use it for the new same-scan recon-all-clinical surfaces. |
 
 ```bash
-# self-intersection + mesh figures for the final model
+# Published 0.1083% result: marching-cubes template and sample meshes
 python eval_selfint_mesh.py --runs svf_E_full:"SVF-E FULL" \
     --val <...>/neurite_oasis/full_val.txt --surfcheck \
     --final --figdir figs --n_fig 3
 
-# gap closure (the honesty check on the number above)
-python check_push_control.py 10
+# Real FreeSurfer lh.white/rh.white template, sample, and deformed meshes
+python eval_selfint_mesh.py --runs svf_E_full:"SVF-E FULL (.surf)" \
+    --val <...>/neurite_oasis/full_val.txt --fixed_name seg4_onehot_clinical.npy \
+    --template_surf --sample_surf --physical_flips --surfcheck \
+    --surfcheck_sample_surf --exact_only --final \
+    --figdir figs_freesurfer --n_fig 6
+
+# Physical-distance direction control on the full held-out set
+python check_push_control.py 83
 ```
 
-## Why self-intersection needs care
+## Why the triangle-flip proxy needs care
 
 The warp is stored as a **pull** field: `grid = idg + disp`, sampled as
 `moving[p + disp(p)]`, so the map runs sample → template. Carrying a *template*

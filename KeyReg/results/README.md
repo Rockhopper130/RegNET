@@ -32,17 +32,19 @@ are not comparable to the table above.
 split with a fixed seed. Logs in `svfE_full.log`. All three columns come from the
 same final checkpoint (epoch 229), not a mid-training one.
 
-| | Train / Val | WM Dice | Folding % | Self-intersection % |
+| | Train / Val | WM Dice | Folding % | Triangle-orientation flips % (MC mesh) |
 |---|---|---|---|---|
 | SVF-E, original | 40 / 10 | 0.9122 | 0.0070 | 0.1434 |
 | **SVF-E, full** | **330 / 83** | **0.9111** | **0.0046** | **0.1083** |
 
 The headline Dice is unchanged (0.9122 -> 0.9111) on 6.6x the training data and
 8.3x the validation set, so the 0.91 was not an artifact of the small subset.
-Both folding and self-intersection improved.
+Both folding and the triangle-flip proxy improved.
 
-The self-intersection column is measured by `eval_selfint_mesh.py`, not the older
-`eval_selfint.py` — see below.
+The last column is measured by `eval_selfint_mesh.py` on a marching-cubes template
+WM mesh in the 128^3 model grid, not on a FreeSurfer `.surf` mesh. It counts
+triangle normal reversals; it is not an exact triangle-triangle self-intersection
+test.
 
 Reproduce with:
 
@@ -50,7 +52,7 @@ Reproduce with:
     python eval_selfint_mesh.py --val <...>/neurite_oasis/full_val.txt \
                                 --runs svf_E_full:"SVF-E FULL" --surfcheck
 
-## Self-intersection was overstated ~8x by `eval_selfint.py`
+## The triangle-flip proxy was overstated ~8x by `eval_selfint.py`
 
 `eval_selfint.py` pushes template-mesh vertices into subject space with
 
@@ -71,53 +73,46 @@ deformations its own error bends triangles and fabricates orientation flips.
 | `fixedpt` | solve `o + disp(o) = v` | `invert_to_sample`, ported from `S-RegNET/model.py` on the `invertible-deform-SRegNET` branch |
 | `svfexact` | `v + disp_inv(v)`, `disp_inv = svf_integrate(-vel)` | exact: for a stationary velocity field `Phi = exp(vel)`, so `Phi^-1 = exp(-vel)` |
 
-Corrected triangle-flip %, and the check that settles which to believe — mean
-distance from the pushed mesh to the subject's **own** WM isosurface, a metric
-none of the three methods optimises:
+Corrected triangle-flip percentages:
 
-| Run | WM Dice | `approx` (old) | `fixedpt` | **`svfexact`** | surf. dist: approx / fixedpt / svfexact |
-|-----|---------|--------|---------|----------|------------------|
-| SVF-E (40/10)    | 0.9122 | 1.1139% | 0.3404% | **0.1434%** | 1.631 / 1.266 / **1.253** mm |
-| SVF-E full (330/83) | 0.9111 | 1.1431% | 0.1625% | **0.1083%** | 1.603 / 1.288 / **1.280** mm |
-| SVF-F (40/10)    | 0.8532 | 0.1565% | 0.0964% | **0.0111%** | 1.699 / 1.452 / **1.443** mm |
+| Run | WM Dice | `approx` (old) | `fixedpt` | **`svfexact`** |
+|-----|---------|--------|---------|----------|
+| SVF-E (40/10)    | 0.9122 | 1.1139% | 0.3404% | **0.1434%** |
+| SVF-E full (330/83) | 0.9111 | 1.1431% | 0.1625% | **0.1083%** |
+| SVF-F (40/10)    | 0.8532 | 0.1565% | 0.0964% | **0.0111%** |
 
 The `approx` column reproduces the old numbers exactly (1.1431% for the full run;
 1.1139% vs the 1.0904% in `selfint.log`, which was scored on the mid-run epoch-191
 checkpoint), confirming the two scripts share that code path.
 
-On surface agreement `approx` is clearly the worst map and `fixedpt`/`svfexact`
-are equally accurate — so the drop from ~1.14% to ~0.11% is a real correction, not
-a different measurement. `fixedpt` still reports 1.5-3x more flips than `svfexact`
-because flipping is a *local* property: it drives the residual to ~0 for >95% of
-vertices but strands ~1% of them by up to 4.6 voxels, and each stray flips every
-triangle touching it. `svfexact` has no strays — `exp(-vel)` is a diffeomorphism
-by construction, so its error is smooth and sub-voxel (p50 0.15 vox) and cannot
-flip a triangle. Warm-starting the fixed point from `svfexact` confirms the
-mechanism: flips fall 0.3404% -> 0.2399% while surface accuracy is unchanged.
+`fixedpt` reports more flips than `svfexact` because flipping is a local property:
+it drives the residual to approximately zero for most vertices but strands a small
+fraction, and each stray vertex affects every incident triangle. `svfexact` avoids
+that iterative-solver failure mode by integrating the negated stationary velocity.
 
-## Gap closure — quote this next to self-intersection
+## Gap closure — quote this next to triangle flips
 
-Self-intersection alone flatters a heavily-regularised model: a deformation that
+Triangle flips alone flatter a heavily regularised model: a deformation that
 barely moves is trivially flip-free. `check_push_control.py` measures how much of
 the template→sample surface distance the deformation actually removes, on the same
 val subjects:
 
 | | mean distance to the sample's WM surface |
 |---|---|
-| template, undeformed | 2.290 mm |
-| **deformed template** (`exp(-vel)`) | **1.298 mm** |
-| old first-order push | 1.646 mm |
-| deformation reversed (control) | 2.955 mm |
+| template, undeformed | 1.686 mm |
+| **deformed template** (`exp(-vel)`) | **0.951 mm** |
+| old first-order push | 1.190 mm |
+| deformation reversed (control) | 2.224 mm |
 
-SVF-E closes **43 %** of the gap. The reversed-direction control lands at 2.955 mm
+SVF-E closes **43.6 %** of the gap. The reversed-direction control lands at 2.224 mm
 — worse than not deforming at all — which confirms the push direction is right.
 
-For scale, the subject's own FreeSurfer `lh/rh.white` sits 1.355 mm from the
-`seg4` WM boundary, so 1.298 mm is near the label's own noise floor; the remaining
-error is gyral detail the smoothing removes, not misalignment.
+These corrected distances are computed in scanner-RAS millimetres through each
+subject's aligned-volume affine. The earlier values used one scalar for normalized
+coordinates even though the 160x192x224 input is resized anisotropically to 128^3.
 
-**Quote `svfexact`.** Self-intersection is no longer the weak point it appeared to
-be: SVF-E on the full corpus holds WM Dice 0.9111 at 0.108% flipped triangles —
+**Quote `svfexact`.** SVF-E on the full corpus holds WM Dice 0.9111 at 0.108%
+orientation-flipped triangles on the marching-cubes mesh —
 about 1 triangle in 1000, ~10x better than the 1.14% previously reported. The
 Dice-vs-topology trade-off across the sweep survives in ratio (E is ~10x F), but
 every absolute number is far lower than `selfint.log` states.
@@ -128,6 +123,28 @@ sagittal, axis 1 axial, axis 2 coronal — the naive axial/coronal/sagittal orde
 mislabels all three) with the subject's WM mask in grey, the unpushed template
 surface in orange, the old `v - disp(v)` push dashed magenta, and the correct push
 in cyan with flipped triangles picked out in red.
+
+## Paired GT / recon-all-clinical audit and real `.surf` meshes
+
+The original clinical summary evaluated 413 available segmentations, mixing the
+training and held-out cohorts and including the template while omitting failed
+subject `OAS1_0288`. It is not directly comparable with the 83-subject GT row.
+The corrected comparison uses the same 82 completed held-out subjects:
+
+| Fixed input | Mesh used for flip metric | WM Dice | Triangle flips | Template -> deformed distance to matching target |
+|---|---|---:|---:|---:|
+| neurite GT | marching cubes (128^3 model grid) | 0.9111 | 0.1085% | 1.6853 -> **0.9514 mm** (MC target) |
+| recon-all-clinical | marching cubes (128^3 model grid) | 0.7224 | 0.5314% | 5.3415 -> **3.8468 mm** (MC target) |
+| neurite GT deformation | FreeSurfer `lh/rh.white` (scanner RAS) | 0.9111 | 0.0337% | 4.6325 -> **4.7201 mm** (clinical `.surf` target) |
+| recon-all-clinical deformation | FreeSurfer `lh/rh.white` (scanner RAS) | 0.7224 | 0.2845% | 4.6325 -> **4.2360 mm** (clinical `.surf` target) |
+
+The `.surf` rows use the real FreeSurfer template topology (201,817 vertices,
+403,626 faces), measure normals in physical scanner-RAS coordinates, and compare
+against the subjects' real recon-all-clinical surfaces. There is no
+separate neurite-GT `.surf` set in this workspace, so the third row must not be
+described as distance to a “GT `.surf`”; its target is still the clinical surface.
+That distinction also explains why the GT-driven deformation can improve its own
+GT label boundary while not improving the independently generated clinical mesh.
 
 ## Provenance of `selfint.log` — do not quote it
 
@@ -158,7 +175,11 @@ checkpoints *and* the first-order push described above. Superseded by
 | `eval_svf.log` | Post-hoc TRUE-folding + inference speed for SVF-A/B (188 ms/registration) |
 | `eval_fold.log` | TRUE-folding recompute for the older TPS+flow hybrid models |
 | `selfint.log` | Superseded — mid-run checkpoints, first-order mesh push |
-| `selfint_mesh.log` | **Corrected** triangle-flip self-intersection, SVF-E / SVF-F |
-| `selfint_mesh_full.log` | **Corrected** triangle-flip self-intersection, SVF-E full |
+| `selfint_mesh.log` | Triangle-orientation-flip diagnostics, SVF-E / SVF-F |
+| `selfint_mesh_full.log` | Published marching-cubes result for SVF-E full (0.1083%) |
+| `selfint_marching_cubes_{gt,clinical}_paired.log` | Corrected paired 82-subject MC evaluation |
+| `selfint_freesurfer_{gt,clinical}_paired.log` | Paired evaluation on real FreeSurfer mesh topology |
+| `push_control_physical.log` | Full 83-subject direction control in physical RAS millimetres |
+| `selfint_clinical_unpaired_legacy.log` | Superseded mixed-cohort clinical run; retained with an explicit warning |
 | `svf_curve.png` | Dice / folding training curves |
 | `svf_overlay.png` | Warped-vs-fixed segmentation overlay |

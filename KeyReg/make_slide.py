@@ -29,7 +29,7 @@ T(0.06, 0.755,
 T(0.06, 0.575, "Behaviour", size=13, weight="bold")
 T(0.06, 0.53,
   "• Lighter smoothing keeps the flow sharp → higher accuracy and very low volumetric folding,\n"
-  "   but the white-matter surface deforms more (higher self-intersection).\n"
+  "   but the white-matter surface has more triangle-orientation reversals.\n"
   "• Heavier smoothing keeps velocity gradients low so the discretized Jacobian stays positive\n"
   "   everywhere → folding driven toward zero, at some accuracy cost.", size=12)
 
@@ -41,16 +41,13 @@ T(0.075, 0.325, "Results   (neurite-OASIS, 40 train / 10 val)", size=13, weight=
 T(0.075, 0.265, "Configuration", size=11.5, weight="bold", color="#555")
 T(0.42,  0.265, "WM Dice", size=11.5, weight="bold", color="#555")
 T(0.575, 0.265, "Folding (Jacobian) %", size=11.5, weight="bold", color="#555")
-T(0.83,  0.265, "Self-intersection %", size=11.5, weight="bold", color="#555")
+T(0.83,  0.265, "Triangle flips % (MC)", size=11.5, weight="bold", color="#555")
 
-# NOTE: these are SVF-E @ epoch 191 and SVF-F @ epoch 104, transcribed from
-# selfint.log, which ran while both jobs were still training. The finished runs
-# reached WM 0.9122 and 0.8532; the self-intersection column has not been
-# recomputed against the final checkpoints. See results/README.md before
-# presenting these. Numbers left as-is so the slide matches selfint.log.
+# Final 40/10 checkpoints. Triangle flips are the exact-SVF-inverse results on
+# the marching-cubes template mesh; see results/README.md for the definition.
 rows = [
-    ("Balanced  (int=12, smooth=3000)", "0.9112", "0.0064", "1.09"),
-    ("Fold-free (int=14, smooth=8000)", "0.8458", "0.0008", "0.168"),
+    ("Balanced  (int=12, smooth=3000)", "0.9122", "0.0070", "0.1434"),
+    ("Fold-free (int=14, smooth=8000)", "0.8532", "0.0006", "0.0111"),
 ]
 y = 0.205
 for cfg, d, f, s in rows:

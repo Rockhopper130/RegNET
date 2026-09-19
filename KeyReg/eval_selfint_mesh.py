@@ -1,5 +1,10 @@
-"""Corrected surface self-intersection (triangle-flip %) for the KeyReg SVF models,
-plus mesh visualisations.
+"""Triangle-orientation-flip evaluation for KeyReg SVF models, plus mesh figures.
+
+This project historically called the metric "mesh self-intersection", but the
+implementation counts faces whose normal reverses relative to the undeformed
+template. It is a topology/folding proxy, not an exact non-adjacent
+triangle-triangle intersection test. Reports and figure titles therefore use the
+precise name "triangle orientation flips".
 
 Why this exists
 ---------------
@@ -16,8 +21,8 @@ Carrying a *template* vertex v into subject space therefore needs Phi^-1(v),
 i.e. the o with `o + disp(o) = v`.  `v - disp(v)` is only the first-order
 (one-step Picard) approximation of that inverse.  Under the large deformations
 SVF-E produces it is not accurate, and the error itself bends triangles and
-fabricates orientation flips -- so the reported self-intersection is an upper
-bound polluted by inverse error, not a property of the model.
+fabricates orientation flips -- so the old result is an upper bound polluted by
+inverse error, not a property of the model.
 
 This script pushes the mesh three ways and reports all three so the difference
 is visible:
@@ -32,20 +37,18 @@ is visible:
                                                field: Phi = exp(vel) so
                                                Phi^-1 = exp(-vel)
 
-`svfexact` is the one to quote.  All three were checked against a metric none of
-them optimises -- mean distance from the pushed mesh to the subject's OWN WM
-isosurface -- which puts `approx` at 1.63 mm and `fixedpt`/`svfexact` at 1.266 /
-1.253 mm: the two corrected inverses are equally accurate as maps, so the gap to
-`approx` is a genuine artifact of the first-order push.
+`svfexact` is the one to quote. All three can also be checked against a metric
+none of them optimises: mean physical RAS distance from the pushed mesh to the
+subject's own WM surface. Physical distances are computed through the original
+aligned-volume affine; the 160x192x224 input is resized to 128^3, so multiplying
+normalized distances by a single scalar is invalid.
 
 They still differ on flip count (0.34% vs 0.14%) because flipping is a *local*
 property.  `fixedpt` drives the residual to ~0 for >95% of vertices but strands
 ~1% of them by up to 4.6 voxels, and each stray vertex flips every triangle
-touching it.  `svfexact` has no strays: exp(-vel) is a diffeomorphism by
-construction, so its error is smooth and sub-voxel (p50 0.15 vox) and cannot flip
-a triangle.  Warm-starting the fixed point from `svfexact` confirms the
-mechanism -- it removes some strays and the count drops 0.34% -> 0.24% while the
-map's surface accuracy is unchanged.
+touching it. `svfexact` has no fixed-point-solver strays: exp(-vel) is the
+closed-form inverse of the stationary velocity field. Remaining counted faces
+reflect discretisation and the limitations of the normal-reversal proxy.
 
 Usage
 -----
@@ -76,9 +79,17 @@ ap.add_argument("--sweep_iters", type=int, nargs="*", default=None,
 ap.add_argument("--surfcheck", action="store_true",
                 help="also measure each pushed mesh against the subject's OWN WM isosurface "
                      "(a discriminator neither inverse method optimises)")
+ap.add_argument("--surfcheck_sample_surf", action="store_true",
+                help="with --surfcheck, measure distance to the subject's FreeSurfer "
+                     "lh/rh.white mesh instead of its marching-cubes WM isosurface")
 ap.add_argument("--sample_surf", action="store_true",
                 help="draw the sample WM from the subject's real FreeSurfer lh/rh.white "
                      "instead of a marching-cubes isosurface (skips subjects without one)")
+ap.add_argument("--template_surf", action="store_true",
+                help="use the template subject's real FreeSurfer lh/rh.white mesh for the "
+                     "template, deformation, and triangle-flip metric (default: marching cubes)")
+ap.add_argument("--template_subject", default="OASIS_OAS1_0001_MR1",
+                help="template subject whose lh/rh.white files are used with --template_surf")
 ap.add_argument("--surf_root", default=f"{_D}/oasis_mri_outputs")
 ap.add_argument("--surf_suffix", default="_clinical")
 ap.add_argument("--surf_reg", default=None,
@@ -89,7 +100,23 @@ ap.add_argument("--final", action="store_true",
                 help="publication figure: correct push only, no old-vs-new comparison")
 ap.add_argument("--figdir", default=None, help="if set, write mesh figures here")
 ap.add_argument("--n_fig", type=int, default=3, help="how many val subjects to render")
+ap.add_argument("--fixed_name", default=None,
+                help="replace each --val entry's basename at evaluation time, e.g. "
+                     "seg4_onehot_clinical.npy for a paired GT/clinical comparison")
+ap.add_argument("--require_name", default=None,
+                help="keep only --val subjects having this sibling file, without replacing "
+                     "the evaluated basename (useful for a paired-cohort GT run)")
+ap.add_argument("--exact_only", action="store_true",
+                help="evaluate only the exact SVF inverse (skip the slower approximation and "
+                     "fixed-point diagnostics; requires --final when figures are requested)")
+ap.add_argument("--physical_flips", action="store_true",
+                help="compare triangle normals after conversion to physical scanner-RAS "
+                     "coordinates (recommended for exported FreeSurfer meshes)")
+ap.add_argument("--limit", type=int, default=None,
+                help="evaluate only the first N selected subjects (smoke tests only)")
 args = ap.parse_args()
+if args.exact_only and args.figdir and not args.final:
+    ap.error("--exact_only figures require --final")
 
 dev = args.device
 ts = (128, 128, 128)
@@ -106,7 +133,7 @@ vy = verts[:, 1] / (H - 1) * 2 - 1                      # H -> y
 vz = verts[:, 0] / (D - 1) * 2 - 1                      # D -> z
 vn = torch.tensor(np.stack([vx, vy, vz], 1), dtype=torch.float32, device=dev)   # (N,3)
 faces_t = torch.tensor(faces.astype(np.int64), device=dev)
-print(f"template WM surface: {len(vn):,} verts, {len(faces):,} faces", flush=True)
+template_mesh_src = "marching cubes of template WM label"
 
 
 def sample_field(field, pts):
@@ -137,8 +164,15 @@ def invert_to_sample(flow, points, n_iter=50, alpha=0.5, snapshots=None, init=No
     return o, res, snaps
 
 
-def flip_mask(v0, v1):
+def flip_mask(v0, v1, subj=None):
     """Per-face orientation flip between the template mesh v0 and pushed mesh v1."""
+    if args.physical_flips:
+        if subj is None:
+            raise ValueError("subject is required with --physical_flips")
+        v0 = torch.as_tensor(norm_to_world(v0.detach().cpu().numpy(), subj),
+                             dtype=v0.dtype, device=v0.device)
+        v1 = torch.as_tensor(norm_to_world(v1.detach().cpu().numpy(), subj),
+                             dtype=v1.dtype, device=v1.device)
     a0, b0, c0 = v0[faces_t[:, 0]], v0[faces_t[:, 1]], v0[faces_t[:, 2]]
     a1, b1, c1 = v1[faces_t[:, 0]], v1[faces_t[:, 1]], v1[faces_t[:, 2]]
     n0 = torch.cross(b0 - a0, c0 - a0, dim=1)
@@ -162,9 +196,6 @@ def velocity(m, moving, fixed):
 
 if args.surfcheck:
     from scipy.spatial import cKDTree
-
-MM_PER_NORM = 256.0 / 2.0     # normalized -> mm (256 mm FOV across [-1,1])
-
 
 def subject_wm_surface_norm(fix_wm, want_faces=False):
     """Marching-cubes the subject's WM channel and return its vertices in the same
@@ -217,9 +248,58 @@ def load_sample_white(subj):
     return np.concatenate([lv, rv]), np.concatenate([lf, rf + len(lv)])
 
 
+def norm_to_world(v, subj):
+    """Model-normalized (x,y,z) -> scanner RAS millimetres via the subject's
+    aligned volume affine. The pre-resize grid is 160x192x224, so a single
+    isotropic normalized-to-mm scale factor is not valid."""
+    import nibabel as nib
+    ref = os.path.join(f"{_D}/neurite_oasis", subj, "aligned_seg4.nii.gz")
+    im = nib.load(ref)
+    nd = np.asarray(im.shape, dtype=np.float64)
+    x, y, z = v[:, 0], v[:, 1], v[:, 2]
+    vox = np.stack([(z + 1) / 2 * (nd[0] - 1),
+                    (y + 1) / 2 * (nd[1] - 1),
+                    (x + 1) / 2 * (nd[2] - 1)], 1)
+    return (np.c_[vox, np.ones(len(vox))] @ im.affine.T)[:, :3]
+
+
+if args.template_surf:
+    tv, tf = load_sample_white(args.template_subject)
+    if tv is None:
+        raise FileNotFoundError(
+            f"FreeSurfer lh/rh.white not found for template {args.template_subject}")
+    vn = torch.tensor(tv, dtype=torch.float32, device=dev)
+    faces = tf
+    faces_t = torch.tensor(faces, dtype=torch.int64, device=dev)
+    template_mesh_src = "FreeSurfer template lh/rh.white"
+
+print(f"template WM surface [{template_mesh_src}]: "
+      f"{len(vn):,} verts, {len(faces):,} faces", flush=True)
+
+
 idg = identity_grid_vol(128, dev)
 tpl_b = tpl.unsqueeze(0).to(dev)
 va = read_list(args.val)
+if args.require_name:
+    requested = [os.path.join(os.path.dirname(fp), args.require_name) for fp in va]
+    missing = [fp for fp in requested if not os.path.exists(fp)]
+    va = [fp for fp, req in zip(va, requested) if os.path.exists(req)]
+    if missing:
+        print(f"WARNING: excluded {len(missing)} unpaired subjects without "
+              f"{args.require_name}:", flush=True)
+        for fp in missing:
+            print(f"    {os.path.basename(os.path.dirname(fp))}", flush=True)
+if args.fixed_name:
+    requested = [os.path.join(os.path.dirname(fp), args.fixed_name) for fp in va]
+    missing = [fp for fp in requested if not os.path.exists(fp)]
+    va = [fp for fp in requested if os.path.exists(fp)]
+    if missing:
+        print(f"WARNING: skipped {len(missing)} paired subjects without {args.fixed_name}:",
+              flush=True)
+        for fp in missing:
+            print(f"    {os.path.basename(os.path.dirname(fp))}", flush=True)
+if args.limit is not None:
+    va = va[:args.limit]
 
 # --------------------------------------------------------------------------- #
 # Figures
@@ -312,17 +392,18 @@ def contour(vox, axis, s, fcs=None):
     return orient_seg(seg, axis), fidx
 
 
-def render_three(name, run_label, v_tpl_vox, v_smp, v_ok_vox, fl_ok, out, smp_src="marching cubes"):
-    """Template WM, sample WM and deformed WM surfaces, as contours on three
-    anatomically-oriented ortho planes. v_smp is (verts_vox, faces) for the
-    subject's own WM isosurface."""
+def render_three(name, run_label, fix_wm, v_tpl_vox, v_smp, v_ok_vox, fl_ok, out, smp_src="marching cubes"):
+    """Template WM, sample WM and deformed WM surfaces, as contours over the
+    subject's WM mask (white) on three anatomically-oriented ortho planes.
+    v_smp is (verts_vox, faces) for the subject's own WM isosurface."""
     smp_vox, smp_faces = v_smp
     center = np.clip(np.round(v_ok_vox.mean(0)).astype(int), 0, np.array([D, H, W]) - 1)
     fig, axes = plt.subplots(1, 3, figsize=(17, 6.2))
     for a in range(3):
         ax = axes[a]
         sl = int(center[a])
-        ax.set_facecolor("black")
+        ax.imshow(orient_image(np.take(fix_wm, sl, axis=a), a),
+                  cmap="gray", origin="lower", aspect="equal", interpolation="nearest")
         seg_t, _ = contour(v_tpl_vox, a, sl)
         if len(seg_t):
             ax.add_collection(LineCollection(seg_t, colors="orange", linewidths=1.1, alpha=0.9))
@@ -336,20 +417,17 @@ def render_three(name, run_label, v_tpl_vox, v_smp, v_ok_vox, fl_ok, out, smp_sr
                 ax.add_collection(LineCollection(seg[~bad], colors="deepskyblue", linewidths=1.5))
             if bad.any():
                 ax.add_collection(LineCollection(seg[bad], colors="red", linewidths=2.4))
-        ax.set_xlim(0, DIMS[VIEWS[a]["x"]] - 1)
-        ax.set_ylim(0, DIMS[VIEWS[a]["y"]] - 1)
-        ax.set_aspect("equal")
         ax.set_title(f"{VIEWS[a]['name']} @ {sl}")
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.axis("off")
         if a == 0:
             ax.legend(handles=[
-                Line2D([0], [0], color="orange", lw=2, label="template WM"),
+                Line2D([0], [0], color="orange", lw=2, label=f"template WM ({template_mesh_src})"),
                 Line2D([0], [0], color="limegreen", lw=2, label=f"sample WM ({smp_src})"),
                 Line2D([0], [0], color="deepskyblue", lw=2, label="deformed WM"),
-                Line2D([0], [0], color="red", lw=2, label="self-intersecting"),
+                Line2D([0], [0], color="red", lw=2, label="orientation-flipped triangle"),
             ], loc="lower right", fontsize=8, framealpha=0.75)
     fig.suptitle(f"{run_label} — {name}   template / sample / deformed WM surface   "
-                 f"[self-intersection {100*fl_ok.mean():.4f}%]",
+                 f"[triangle orientation flips {100*fl_ok.mean():.4f}%]",
                  fontweight="bold", fontsize=13)
     fig.tight_layout()
     fig.savefig(out, dpi=150, bbox_inches="tight", facecolor="white")
@@ -398,7 +476,7 @@ def render(name, run_label, fix_wm, v_tpl_vox, v_ok_vox, v_old_vox, fl_ok, fl_ol
 
     if args.final:
         fig.suptitle(f"{run_label} — {name}   template WM mesh deformed into subject space   "
-                     f"[self-intersection {100*fl_ok.mean():.4f}%]",
+                     f"[triangle orientation flips {100*fl_ok.mean():.4f}%]",
                      fontweight="bold", fontsize=13)
         fig.tight_layout()
         fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -441,11 +519,12 @@ for spec in args.runs:
     rq = {k: [] for k in ("fixedpt", "svfexact")}
     fl_warm, res_warm_q = [], []
     n_done = 0
-    surf = {k: [] for k in ("approx", "fixedpt", "svfexact", "warm")}
+    surf = {k: [] for k in ("template", "approx", "fixedpt", "svfexact", "warm")}
     sweep = {k: [] for k in (args.sweep_iters or [])}
     pcs = np.zeros(5)
     with torch.no_grad():
         for si, fp in enumerate(va):
+            subj = os.path.basename(os.path.dirname(fp))
             fix = load_seg(fp, ts).unsqueeze(0).to(dev)
             vel = velocity(m, tpl_b, fix)
             disp = svf_integrate(vel, m.int_steps, idg)              # pull disp (B,3,D,H,W)
@@ -454,43 +533,76 @@ for spec in args.runs:
                                    padding_mode="border", align_corners=True)
             pcs += np.array(dice_per_class(warped, fix))
 
-            # --- three pushes -------------------------------------------------
-            v_approx = vn - sample_field(disp, vn)                    # old, first order
-            v_fixed, res, snaps = invert_to_sample(disp, vn, args.n_iter, args.alpha,
-                                                   snapshots=args.sweep_iters)
+            # The exact stationary-velocity inverse is the reported result and
+            # the only path needed for publication figures.
             disp_inv = svf_integrate(-vel, m.int_steps, idg)          # exact SVF inverse
             v_exact = vn + sample_field(disp_inv, vn)
-
-            f_a, f_f, f_e = (flip_mask(vn, v_approx), flip_mask(vn, v_fixed),
-                             flip_mask(vn, v_exact))
-            fl_approx.append(f_a.float().mean().item() * 100)
-            fl_fixed.append(f_f.float().mean().item() * 100)
+            f_e = flip_mask(vn, v_exact, subj)
             fl_exact.append(f_e.float().mean().item() * 100)
-            # Same solver, warm-started from the SVF inverse: does it stay there
-            # (svfexact already near-optimal) or walk to the cold-start answer?
-            v_warm, res_w, _ = invert_to_sample(disp, vn, args.n_iter, args.alpha,
-                                                init=v_exact)
-            f_w = flip_mask(vn, v_warm)
-            fl_warm.append(f_w.float().mean().item() * 100)
 
-            res_e = (v_exact + sample_field(disp, v_exact) - vn).norm(dim=1)
-            VOX = (128 - 1) / 2.0                       # normalized -> voxels
-            for k, rr in (("fixedpt", res), ("svfexact", res_e)):
-                rq[k].append(np.percentile(rr.cpu().numpy() * VOX, [50, 95, 99, 100]))
-            res_warm_q.append(np.percentile(res_w.cpu().numpy() * VOX, [50, 95, 99, 100]))
+            if args.exact_only:
+                if args.surfcheck:
+                    subj = os.path.basename(os.path.dirname(fp))
+                    if args.surfcheck_sample_surf:
+                        target, _ = load_sample_white(subj)
+                        if target is None:
+                            print(f"    [skip distance] {subj}: no lh/rh.white", flush=True)
+                    else:
+                        target = subject_wm_surface_norm(fix[0, 3].cpu().numpy())
+                    if target is not None:
+                        tree = cKDTree(norm_to_world(target, subj))
+                        surf["template"].append(tree.query(
+                            norm_to_world(vn.cpu().numpy(), subj))[0].mean())
+                        surf["svfexact"].append(tree.query(
+                            norm_to_world(v_exact.cpu().numpy(), subj))[0].mean())
+            else:
+                # Diagnostic alternatives retained to reproduce the historical
+                # comparison; they are deliberately skipped by --exact_only.
+                v_approx = vn - sample_field(disp, vn)                # old, first order
+                v_fixed, res, snaps = invert_to_sample(
+                    disp, vn, args.n_iter, args.alpha, snapshots=args.sweep_iters)
 
-            if args.surfcheck:
-                tree = cKDTree(subject_wm_surface_norm(fix[0, 3].cpu().numpy()))
-                for k, vv in (("approx", v_approx), ("fixedpt", v_fixed),
-                              ("svfexact", v_exact), ("warm", v_warm)):
-                    surf[k].append(tree.query(vv.cpu().numpy())[0].mean() * MM_PER_NORM)
-            res_exact_max.append(res_e.max().item())
-            res_exact_frac.append((res_e > args.res_tol).float().mean().item() * 100)
-            res_max.append(res.max().item())
-            res_frac.append((res > args.res_tol).float().mean().item() * 100)
-            inv_err.append((v_fixed - v_exact).norm(dim=1).mean().item())
-            for k, ov in snaps.items():
-                sweep[k].append(flip_mask(vn, ov).float().mean().item() * 100)
+                f_a, f_f = (flip_mask(vn, v_approx, subj),
+                            flip_mask(vn, v_fixed, subj))
+                fl_approx.append(f_a.float().mean().item() * 100)
+                fl_fixed.append(f_f.float().mean().item() * 100)
+                # Same solver, warm-started from the SVF inverse: does it stay there
+                # (svfexact already near-optimal) or walk to the cold-start answer?
+                v_warm, res_w, _ = invert_to_sample(disp, vn, args.n_iter, args.alpha,
+                                                    init=v_exact)
+                f_w = flip_mask(vn, v_warm, subj)
+                fl_warm.append(f_w.float().mean().item() * 100)
+
+                res_e = (v_exact + sample_field(disp, v_exact) - vn).norm(dim=1)
+                VOX = (128 - 1) / 2.0                   # normalized -> voxels
+                for k, rr in (("fixedpt", res), ("svfexact", res_e)):
+                    rq[k].append(np.percentile(rr.cpu().numpy() * VOX, [50, 95, 99, 100]))
+                res_warm_q.append(np.percentile(
+                    res_w.cpu().numpy() * VOX, [50, 95, 99, 100]))
+
+                if args.surfcheck:
+                    subj = os.path.basename(os.path.dirname(fp))
+                    if args.surfcheck_sample_surf:
+                        target, _ = load_sample_white(subj)
+                        if target is None:
+                            print(f"    [skip distance] {subj}: no lh/rh.white", flush=True)
+                    else:
+                        target = subject_wm_surface_norm(fix[0, 3].cpu().numpy())
+                    if target is not None:
+                        tree = cKDTree(norm_to_world(target, subj))
+                        surf["template"].append(tree.query(
+                            norm_to_world(vn.cpu().numpy(), subj))[0].mean())
+                        for k, vv in (("approx", v_approx), ("fixedpt", v_fixed),
+                                      ("svfexact", v_exact), ("warm", v_warm)):
+                            surf[k].append(tree.query(
+                                norm_to_world(vv.cpu().numpy(), subj))[0].mean())
+                res_exact_max.append(res_e.max().item())
+                res_exact_frac.append((res_e > args.res_tol).float().mean().item() * 100)
+                res_max.append(res.max().item())
+                res_frac.append((res > args.res_tol).float().mean().item() * 100)
+                inv_err.append((v_fixed - v_exact).norm(dim=1).mean().item())
+                for k, ov in snaps.items():
+                    sweep[k].append(flip_mask(vn, ov, subj).float().mean().item() * 100)
 
             if args.figdir and n_done < args.n_fig and args.final:
                 subj = os.path.basename(os.path.dirname(fp))
@@ -504,7 +616,7 @@ for spec in args.runs:
                     sv, sfc = subject_wm_surface_norm(fix[0, 3].cpu().numpy(), want_faces=True)
                     src = "marching cubes"
                 n_done += 1
-                render_three(subj, name, v_tpl_vox, (norm_to_vox(sv), sfc),
+                render_three(subj, name, fix[0, 3].cpu().numpy(), v_tpl_vox, (norm_to_vox(sv), sfc),
                              norm_to_vox(v_exact.cpu().numpy()), f_e.cpu().numpy(),
                              os.path.join(args.figdir, f"mesh_{d}_{subj}.png"), src)
             elif args.figdir and si < args.n_fig:
@@ -518,32 +630,42 @@ for spec in args.runs:
 
     n = len(va)
     print(f"\n=== {name}  (dir {d}, epoch {ck.get('epoch')}, {n} val subjects) ===")
-    print(f"  WM Dice: {pcs[3]/n:.4f} | logged folding: {ck.get('fold'):.4f}%")
-    print(f"  triangle-flip %   approx  (v - disp(v), old eval_selfint.py) : {np.mean(fl_approx):.4f}%")
-    print(f"  triangle-flip %   fixedpt (invert_to_sample, invertible-deform): {np.mean(fl_fixed):.4f}%")
+    print(f"  template mesh source: {template_mesh_src}")
+    print("  triangle-normal coordinates: " +
+          ("physical scanner RAS" if args.physical_flips else "128^3 model grid"))
+    print(f"  WM Dice: {pcs[3]/n:.4f} | checkpoint's stored GT-val folding: "
+          f"{ck.get('fold'):.4f}%")
     print(f"  triangle-flip %   svfexact(integrate(-vel), ground truth)     : {np.mean(fl_exact):.4f}%")
-    print(f"  residual of fixedpt   max {np.mean(res_max):.2e} | "
-          f"{np.mean(res_frac):.4f}% of verts over tol {args.res_tol:g}")
-    print(f"  residual of svfexact  max {np.mean(res_exact_max):.2e} | "
-          f"{np.mean(res_exact_frac):.4f}% of verts over tol {args.res_tol:g}")
-    print("     NOTE: the residual is what the fixed point explicitly minimises, so it cannot")
-    print("     adjudicate between the two -- read the percentile table and the surface")
-    print("     distance below instead. svfexact carries a smooth sub-voxel bias everywhere;")
-    print("     fixedpt is ~exact for >95% of vertices but strands ~1% by several voxels, and")
-    print("     those strays are what flip triangles.")
-    print(f"  triangle-flip %   fixedpt WARM-STARTED from svfexact           : {np.mean(fl_warm):.4f}%")
-    print(f"  |fixedpt - svfexact| mean vertex gap: {np.mean(inv_err):.2e} normalized "
-          f"({np.mean(inv_err)*(128-1)/2:.3f} vox)")
-    print("  inverse residual, voxels        p50      p95      p99      max")
-    for k in ("fixedpt", "svfexact"):
-        a = np.mean(np.stack(rq[k]), 0)
-        print(f"      {k:<24s} {a[0]:8.4f} {a[1]:8.4f} {a[2]:8.4f} {a[3]:8.4f}")
-    a = np.mean(np.stack(res_warm_q), 0)
-    print(f"      {'warm':<24s} {a[0]:8.4f} {a[1]:8.4f} {a[2]:8.4f} {a[3]:8.4f}")
+    if not args.exact_only:
+        print(f"  triangle-flip %   approx  (v - disp(v), old eval_selfint.py) : {np.mean(fl_approx):.4f}%")
+        print(f"  triangle-flip %   fixedpt (invert_to_sample, invertible-deform): {np.mean(fl_fixed):.4f}%")
+        print(f"  residual of fixedpt   max {np.mean(res_max):.2e} | "
+              f"{np.mean(res_frac):.4f}% of verts over tol {args.res_tol:g}")
+        print(f"  residual of svfexact  max {np.mean(res_exact_max):.2e} | "
+              f"{np.mean(res_exact_frac):.4f}% of verts over tol {args.res_tol:g}")
+        print("     NOTE: the residual is what the fixed point explicitly minimises, so it cannot")
+        print("     adjudicate between the two -- read the percentile table and the surface")
+        print("     distance below instead. svfexact carries a smooth sub-voxel bias everywhere;")
+        print("     fixedpt is ~exact for >95% of vertices but strands ~1% by several voxels, and")
+        print("     those strays are what flip triangles.")
+        print(f"  triangle-flip %   fixedpt WARM-STARTED from svfexact           : {np.mean(fl_warm):.4f}%")
+        print(f"  |fixedpt - svfexact| mean vertex gap: {np.mean(inv_err):.2e} normalized "
+              f"({np.mean(inv_err)*(128-1)/2:.3f} vox)")
+        print("  inverse residual, voxels        p50      p95      p99      max")
+        for k in ("fixedpt", "svfexact"):
+            a = np.mean(np.stack(rq[k]), 0)
+            print(f"      {k:<24s} {a[0]:8.4f} {a[1]:8.4f} {a[2]:8.4f} {a[3]:8.4f}")
+        a = np.mean(np.stack(res_warm_q), 0)
+        print(f"      {'warm':<24s} {a[0]:8.4f} {a[1]:8.4f} {a[2]:8.4f} {a[3]:8.4f}")
     if args.surfcheck:
-        print("  mean distance from pushed mesh to the SUBJECT's own WM isosurface (mm)")
-        print("      -- independent of the residual metric; lower = the map is genuinely better")
-        for k in ("approx", "fixedpt", "svfexact", "warm"):
+        target_name = ("SUBJECT's FreeSurfer lh/rh.white mesh" if args.surfcheck_sample_surf
+                       else "SUBJECT's own marching-cubes WM isosurface")
+        print(f"  mean distance to the {target_name} (mm)")
+        print(f"      -- physical RAS distance via aligned volume affine; "
+              f"{len(surf['template'])} subjects; lower is better")
+        keys = (("template", "svfexact") if args.exact_only else
+                ("template", "approx", "fixedpt", "svfexact", "warm"))
+        for k in keys:
             print(f"      {k:<24s} {np.mean(surf[k]):.4f} mm")
     if sweep:
         print("  fixed-point convergence (flip %% vs iterations, target = svfexact "

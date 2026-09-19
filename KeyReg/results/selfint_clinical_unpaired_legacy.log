@@ -1,0 +1,33 @@
+LEGACY / DO NOT REPORT: this run mixes train/validation subjects, includes the
+template, and uses an invalid single-factor normalized-to-mm conversion. Use the
+paired *_paired.log files instead.
+
+template WM surface: 141,971 verts, 287,154 faces
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_clinical/mesh_svf_E_full_OASIS_OAS1_0001_MR1.png
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_clinical/mesh_svf_E_full_OASIS_OAS1_0002_MR1.png
+    figure -> /shared/home/v_vijay_bala_mahalingam/figs_clinical/mesh_svf_E_full_OASIS_OAS1_0003_MR1.png
+
+=== SVF-E FULL (recon-all-clinical)  (dir svf_E_full, epoch 229, 413 val subjects) ===
+  WM Dice: 0.7299 | logged folding: 0.0046%
+  triangle-flip %   approx  (v - disp(v), old eval_selfint.py) : 5.2965%
+  triangle-flip %   fixedpt (invert_to_sample, invertible-deform): 3.6070%
+  triangle-flip %   svfexact(integrate(-vel), ground truth)     : 0.5420%
+  residual of fixedpt   max 1.67e-01 | 13.6952% of verts over tol 0.001
+  residual of svfexact  max 9.08e-02 | 92.5233% of verts over tol 0.001
+     NOTE: the residual is what the fixed point explicitly minimises, so it cannot
+     adjudicate between the two -- read the percentile table and the surface
+     distance below instead. svfexact carries a smooth sub-voxel bias everywhere;
+     fixedpt is ~exact for >95% of vertices but strands ~1% by several voxels, and
+     those strays are what flip triangles.
+  triangle-flip %   fixedpt WARM-STARTED from svfexact           : 2.4984%
+  |fixedpt - svfexact| mean vertex gap: 5.42e-03 normalized (0.344 vox)
+  inverse residual, voxels        p50      p95      p99      max
+      fixedpt                    0.0000   2.7187   5.2565  10.6020
+      svfexact                   0.2347   1.2239   2.1965   5.7687
+      warm                       0.0000   2.6898   5.2708  10.6203
+  mean distance from pushed mesh to the SUBJECT's own WM isosurface (mm)
+      -- independent of the residual metric; lower = the map is genuinely better
+      approx                   5.0136 mm
+      fixedpt                  4.5661 mm
+      svfexact                 4.4634 mm
+      warm                     4.5614 mm

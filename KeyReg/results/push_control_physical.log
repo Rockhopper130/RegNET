@@ -1,0 +1,11 @@
+template WM surface: 141,971 verts
+
+WM Dice of warped template vs sample: 0.9111   (83 subjects)
+
+mean distance to the SAMPLE's WM surface (mm) -- lower is better:
+   template(unpushed)       1.686
+   push v-disp(v)           1.190
+   push exp(-vel)           0.951
+   push +disp(v)            2.224
+
+deformation closes 43.6% of the template->sample gap (1.686 -> 0.951 mm)
