@@ -21,6 +21,14 @@ Composite (sum of weighted terms; weights live in config.yaml -> loss):
     Distillation regression (only active when pred_vel/target_vel are passed)
       - vel_mse: MSE against the per-subject band-limited "combo" velocity
 
+    Surface distance (only active when `surf` is passed)
+      - surface, surface_tail: mm distance between the deformed white
+        surfaces and the precomputed signed-distance volumes, both directions
+
+    Mesh regularisers (only active when `surf` carries 'mesh')
+      - mesh_edge, mesh_lap, mesh_normal: distortion of the full pushed
+        template mesh in excess of the affine-aligned template's own
+
     (No cycle term — single-SVF model makes the inverse exact; see
     cycle_consistency_loss, kept only as a diagnostic.)
 
@@ -38,6 +46,9 @@ Notes:
   with config weight 0.5 (not the original 0.01 on plain mean(ReLU(-det))).
 """
 
+import math
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -194,6 +205,111 @@ def velocity_mse_loss(pred_vel, target_vel):
 
 
 # =============================================================================
+# Surface Distance
+# =============================================================================
+
+def sample_sdf(sdf, pts):
+    """Sample a signed-distance volume at mesh vertices.
+
+    Args:
+        sdf: (1, 1, D, H, W) signed distance in mm, array layout (i, j, k).
+        pts: (N, 3) grid_sample-normalized (x, y, z) coords of the same grid.
+
+    Returns:
+        (N,) sampled distance, in mm.
+
+    The exact op utils/visualize_mesh.sample_field uses for the flow field, so
+    the loss reads the geometry at the same coordinates the eval-time mesh push
+    does: align_corners=False matches the SpatialTransformer, and
+    padding_mode='border' hands a vertex just outside the FOV the edge distance
+    rather than 0 mm, which would read as "already on the surface".
+    """
+    g = pts.view(1, -1, 1, 1, 3)
+    s = F.grid_sample(sdf, g, mode='bilinear', padding_mode='border',
+                      align_corners=False)
+    return s.view(-1)
+
+
+def surface_distance_loss(sdf, pts):
+    """(mean, tail) unsigned distance in mm from pts to the surface of `sdf`.
+
+    Because the SDF is precomputed per subject, the whole term costs one
+    grid_sample — no nearest-neighbour search inside the training loop — and
+    the gradient w.r.t. the vertex positions (hence the flow) is exact.
+
+    Two numbers, because the deliverable is scored on both: `mean` is the
+    symmetric-distance-style average, `tail` is the mean of the worst 5% and
+    stands in for HD95. The mean alone lets a few badly-placed patches hide
+    behind 300k well-placed vertices, which is precisely the failure the mesh
+    metric catches.
+
+    fp32 regardless of AMP: a half-precision normalized coordinate quantises
+    to ~1e-3, i.e. ~0.13 mm on a 256³ grid — the scale of the loss itself.
+    """
+    d = sample_sdf(sdf.float(), pts.float()).abs()
+    k = max(1, math.ceil(0.05 * d.numel()))
+    return d.mean(), torch.topk(d, k).values.mean()
+
+
+# =============================================================================
+# Mesh Regularisers
+# =============================================================================
+# The three terms the per-subject refinement (bandlimit_opt/instance_opt_surface.py)
+# imports from here, applied in training on the full pushed template mesh, so
+# training pays for the distortion the refinement had to undo.
+
+MESH_TERMS = ('mesh_edge', 'mesh_lap', 'mesh_normal')
+
+
+def mesh_structure(faces, n_verts, mm, device):
+    """Index tensors for the mesh regularisers, built once per template from
+    its (F, 3) faces: unique edges, vertex degree (uniform Laplacian) and the
+    face pairs sharing an edge (a closed manifold has exactly two per edge; an
+    edge with any other count is skipped). `mm` is mm per normalized unit of
+    the vertex coordinates, so the Laplacian term reads in mm."""
+    e = np.sort(np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]), axis=1)
+    edges, inv = np.unique(e, axis=0, return_inverse=True)
+    inv = inv.ravel()
+    order = np.argsort(inv, kind='stable')
+    two = (np.bincount(inv) == 2)[inv[order]]
+    pairs = np.tile(np.arange(len(faces)), 3)[order][two].reshape(-1, 2)
+    t = lambda a: torch.tensor(a, dtype=torch.long, device=device)
+    return {'edges': t(edges), 'pairs': t(pairs), 'faces': t(faces), 'mm': mm,
+            'deg': torch.bincount(t(edges).ravel(), minlength=n_verts).clamp_min(1).float()}
+
+
+def mesh_geometry(v, m):
+    """Per-edge length, per-vertex uniform-Laplacian magnitude and per
+    adjacent-face-pair (1 - n_a . n_b) of a mesh with vertices v (N, 3),
+    normalized coords in, mm out."""
+    v = v * m['mm']
+    e0, e1 = m['edges'][:, 0], m['edges'][:, 1]
+    elen = (v[e1] - v[e0]).norm(dim=1)
+    nb = torch.zeros_like(v).index_add_(0, e0, v[e1]).index_add_(0, e1, v[e0])
+    lap = (nb / m['deg'][:, None] - v).norm(dim=1)
+    fv = v[m['faces']]
+    n = torch.cross(fv[:, 1] - fv[:, 0], fv[:, 2] - fv[:, 0], dim=1)
+    n = n / n.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    bend = 1.0 - (n[m['pairs'][:, 0]] * n[m['pairs'][:, 1]]).sum(1)
+    return elen, lap, bend
+
+
+def mesh_regularizers(v_pushed, v_ref, m):
+    """{mesh_edge, mesh_lap, mesh_normal}: distortion of the pushed mesh in
+    EXCESS of the reference mesh's own — the template's curvature is free, only
+    what the flow adds costs. Squared log edge-length ratio (scale-free), relu
+    excess of the uniform-Laplacian magnitude (mm), relu excess of
+    1 - cos(dihedral) over adjacent faces (scale-free). The reference is a
+    constant: no gradient flows into it."""
+    elen, lap, bend = mesh_geometry(v_pushed.float(), m)
+    with torch.no_grad():
+        elen0, lap0, bend0 = mesh_geometry(v_ref.float(), m)
+    return {'mesh_edge': torch.log(elen / elen0.clamp_min(1e-6)).pow(2).mean(),
+            'mesh_lap': torch.relu(lap - lap0).mean(),
+            'mesh_normal': torch.relu(bend - bend0).mean()}
+
+
+# =============================================================================
 # Lambda-based Adaptive Regularization (linear-λ + anatomy prior)
 # =============================================================================
 #
@@ -338,6 +454,8 @@ class SegRegistrationLoss(nn.Module):
       - bending, jacobian, displacement (symmetric)
       - lambda_smoothness, lambda_prior
       - vel_mse      (active only when pred_vel and target_vel are not None)
+      - surface, surface_tail     (active only when surf is not None)
+      - mesh_edge, mesh_lap, mesh_normal  (active only when surf has 'mesh')
       - affine_reg, affine_ortho  (active only when affine_matrix is not None)
 
     No cycle term: the model integrates a single velocity field both ways
@@ -362,7 +480,14 @@ class SegRegistrationLoss(nn.Module):
     def forward(self, warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
                 flow_fw, flow_rv, lambda_map,
                 affine_matrix=None, pred_vel=None, target_vel=None,
-                return_components=False):
+                surf=None, return_components=False):
+        """`surf`, when given, is the dict train.py._surface_batch builds:
+        {'sdf_subj', 'pts_t2s', 'sdf_tpl', 'pts_s2t'} — the two deformed white
+        vertex sets and the SDFs they are measured against — plus, when the
+        mesh regularisers are on, 'mesh' = (pushed full template mesh, its
+        affine-aligned reference, mesh_structure). Callers that have no
+        surfaces (inference, instance_opt_bandlimited.py) leave it None and
+        get zeros, exactly like vel_mse."""
         loss_dict = {}
 
         # Segmentation alignment (symmetric)
@@ -383,6 +508,28 @@ class SegRegistrationLoss(nn.Module):
             loss_dict['vel_mse'] = velocity_mse_loss(pred_vel, target_vel)
         else:
             loss_dict['vel_mse'] = torch.tensor(0.0, device=flow_fw.device)
+
+        # Surface distance (symmetric: template->subject is the deliverable's
+        # own mesh push, subject->template keeps the flow from earning the
+        # first direction by collapsing cortex onto the template surface)
+        if surf is not None:
+            mean_t2s, tail_t2s = surface_distance_loss(surf['sdf_subj'], surf['pts_t2s'])
+            mean_s2t, tail_s2t = surface_distance_loss(surf['sdf_tpl'], surf['pts_s2t'])
+            loss_dict['surface'] = mean_t2s + mean_s2t
+            loss_dict['surface_tail'] = tail_t2s + tail_s2t
+        else:
+            loss_dict['surface'] = torch.tensor(0.0, device=flow_fw.device)
+            loss_dict['surface_tail'] = torch.tensor(0.0, device=flow_fw.device)
+
+        # Mesh regularisers on the full pushed template mesh (fp32 like the
+        # surface terms; train._surface_batch attaches surf['mesh'] only when
+        # their weights are non-zero)
+        mesh = {}
+        if surf is not None and 'mesh' in surf:
+            with torch.autocast(flow_fw.device.type, enabled=False):
+                mesh = mesh_regularizers(*surf['mesh'])
+        for k in MESH_TERMS:
+            loss_dict[k] = mesh.get(k, torch.tensor(0.0, device=flow_fw.device))
 
         # Affine
         if affine_matrix is not None:

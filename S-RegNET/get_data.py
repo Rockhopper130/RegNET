@@ -18,6 +18,12 @@ File layout expected (per subject directory):
     distill_vel_v1.npy      — shape (3, D, H, W) float32 velocity; only read
                               when target_vel_filename is set, and optional
                               per subject
+    white_sdf_v1.npy        — signed distance (mm) to the subject's own white
+                              surface on its NATIVE seg grid (256³), float16;
+                              only read when white_sdf_filename is set
+    white_surf_v1.npz       — verts_norm (N, 3) float32 + n_lh; the same white
+                              surface as vertices, in normalized coords of
+                              that native grid
 
 Configuration:
     Reads config.yaml for default paths and target_size when run as a
@@ -31,6 +37,9 @@ import numpy as np
 import os
 import yaml
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+PRELOAD_WORKERS = 12
 
 
 def load_config(config_path=None):
@@ -53,6 +62,9 @@ class SegDataset(Dataset):
         - sample_seg:   (5, D, H, W) one-hot — the SUPERVISION TARGET
         - input_seg:    (5, D, H, W) one-hot — the network's 2nd INPUT
         - target_vel, has_target_vel — only when target_vel_filename is set
+        - white_sdf:    (1, D', H', W') float16 signed distance in mm, and
+        - white_verts:  (N, 3) float32 normalized coords — only when
+                        white_sdf_filename / white_surf_filename are set
 
     `input_seg` is the very same tensor as `sample_seg` unless
     `input_seg_filename` is given. That one knob is the whole deployment
@@ -69,6 +81,8 @@ class SegDataset(Dataset):
         seg_filename="seg4_onehot.npy",
         input_seg_filename=None,
         target_vel_filename=None,
+        white_sdf_filename=None,
+        white_surf_filename=None,
         preload=True,
     ):
         """
@@ -87,6 +101,13 @@ class SegDataset(Dataset):
                 bandlimit_opt/generate_distill_targets.py). Unlike the segs
                 this one is optional PER SUBJECT — a subject without it is
                 kept, and its `has_target_vel` flag is False.
+            white_sdf_filename, white_surf_filename: optional pair written by
+                utils/make_white_sdf.py (e.g. "white_sdf_v1.npy" /
+                "white_surf_v1.npz") feeding the surface-distance loss. Both
+                are required of every subject when set — unlike the
+                distillation target these are derived from data every subject
+                has, so a missing one is a generation bug, not a legitimate
+                skip.
             preload: if True, load every subject's seg into RAM at init
                 to eliminate per-epoch I/O on slow filesystems.
         """
@@ -97,12 +118,24 @@ class SegDataset(Dataset):
         self.seg_filename = seg_filename
         self.input_seg_filename = input_seg_filename
         self.target_vel_filename = target_vel_filename
+        self.white_sdf_filename = white_sdf_filename
+        self.white_surf_filename = white_surf_filename
         self.target_size = target_size
 
         self.template_seg = self._load_seg(template_seg_path, target_size)
 
         if input_seg_filename is not None:
             self._require(input_seg_filename)
+
+        if (white_sdf_filename is None) != (white_surf_filename is None):
+            raise ValueError(
+                "white_sdf_filename and white_surf_filename go together (the "
+                "loss needs the subject's distance volume AND its vertices); "
+                f"got {white_sdf_filename!r} / {white_surf_filename!r}")
+
+        if white_sdf_filename is not None:
+            self._require(white_sdf_filename)
+            self._require(white_surf_filename)
 
         if target_vel_filename is not None:
             # Not _require: target generation legitimately drops subjects
@@ -115,6 +148,7 @@ class SegDataset(Dataset):
         self._seg_cache = None
         self._input_cache = None
         self._vel_cache = None
+        self._white_cache = None
         if preload:
             self._preload_all()
 
@@ -127,27 +161,53 @@ class SegDataset(Dataset):
                 f"{len(missing)}/{len(self.subject_dirs)} subjects have no "
                 f"{filename} (first: {missing[:3]})")
 
+    def _preload_one(self, subject_dir):
+        """Everything cached for one subject, in cache order."""
+        return (self._cached(subject_dir, self.seg_filename),
+                self._cached(subject_dir, self.input_seg_filename)
+                if self.input_seg_filename is not None else None,
+                self._load_vel(subject_dir)
+                if self.target_vel_filename is not None else None,
+                self._load_white(subject_dir)
+                if self.white_sdf_filename is not None else None)
+
     def _preload_all(self):
-        """Load every sample seg into RAM once.
+        """Load every subject's volumes into RAM once, in parallel.
 
         Cached as uint8: the segs are strictly one-hot (asserted below), so
         the cast is lossless, and float32 would cost 42 MB per volume — a
         second stream at that size is ~14 GB of RAM for OASIS.
+
+        The wait is I/O on the shared NFS, so the loads run on a thread pool.
+        Measured on the cluster (2026-09-16, 330 train subjects, cold cache),
+        12 threads did NOT beat the serial preload (13–25 s per subject either
+        way): the workers sat in page-cache waits and torch's per-thread
+        intra-op pools pushed the process past 1,700 threads. Open levers, not
+        yet measured: torch.set_num_threads(1) inside _preload_one (as
+        utils/make_white_sdf.py's workers do) or a process pool. Executor.map
+        yields in submission order, which keeps every cache index-aligned with
+        subject_dirs.
         """
         from tqdm import tqdm
         n = len(self.subject_dirs)
         streams = 2 if self.input_seg_filename is not None else 1
-        print(f"Preloading {n} x {streams} seg volumes into RAM...")
+        print(f"Preloading {n} x {streams} seg volumes into RAM "
+              f"({PRELOAD_WORKERS} workers)...")
         self._seg_cache = []
         self._input_cache = [] if streams == 2 else None
         self._vel_cache = [] if self.target_vel_filename is not None else None
-        for subject_dir in tqdm(self.subject_dirs, desc="Preloading", ncols=80):
-            self._seg_cache.append(self._cached(subject_dir, self.seg_filename))
-            if self._input_cache is not None:
-                self._input_cache.append(
-                    self._cached(subject_dir, self.input_seg_filename))
-            if self._vel_cache is not None:
-                self._vel_cache.append(self._load_vel(subject_dir))
+        self._white_cache = [] if self.white_sdf_filename is not None else None
+        with ThreadPoolExecutor(max_workers=PRELOAD_WORKERS) as pool:
+            for seg, inp, vel, white in tqdm(
+                    pool.map(self._preload_one, self.subject_dirs),
+                    total=n, desc="Preloading", ncols=80):
+                self._seg_cache.append(seg)
+                if self._input_cache is not None:
+                    self._input_cache.append(inp)
+                if self._vel_cache is not None:
+                    self._vel_cache.append(vel)
+                if self._white_cache is not None:
+                    self._white_cache.append(white)
         print(f"Preloading complete. RAM cached {n * streams} seg volumes.")
 
     def _cached(self, subject_dir, filename):
@@ -165,6 +225,24 @@ class SegDataset(Dataset):
         if not os.path.exists(path):
             return None
         return torch.tensor(np.load(path), dtype=torch.float16)
+
+    def _load_white(self, subject_dir):
+        """(sdf, verts) for the subject's own white surface.
+
+        The SDF stays on its NATIVE grid — no resize to target_size. Vertices
+        are in normalized coords, so grid_sample reads the same physical point
+        whatever the grid resolution, and resampling would only blur the
+        sub-voxel detail the loss exists to see.
+
+        float16, like the distillation target: 33 MB per subject instead of 67
+        (the whole training set has to sit in RAM), and half precision costs
+        ~5e-4 mm on a value clamped to ±10 mm. train.py casts to fp32 on the
+        GPU, never here — a CPU-side fp32 copy is the RAM we are saving.
+        """
+        sdf = np.load(os.path.join(subject_dir, self.white_sdf_filename))
+        verts = np.load(os.path.join(subject_dir, self.white_surf_filename))['verts_norm']
+        return (torch.tensor(sdf, dtype=torch.float16).unsqueeze(0),
+                torch.tensor(verts, dtype=torch.float32))
 
     def _load_seg(self, path, target_size):
         """Load and preprocess a one-hot seg volume."""
@@ -206,6 +284,10 @@ class SegDataset(Dataset):
         }
         if self.target_vel_filename is not None:
             item['target_vel'], item['has_target_vel'] = self._target_vel(idx)
+        if self.white_sdf_filename is not None:
+            item['white_sdf'], item['white_verts'] = (
+                self._white_cache[idx] if self._white_cache is not None
+                else self._load_white(self.subject_dirs[idx]))
         return item
 
     def _target_vel(self, idx):
@@ -248,6 +330,8 @@ if __name__ == "__main__":
                                                              'seg4_onehot.npy'),
                              input_seg_filename=config['data'].get('input_seg_filename'),
                              target_vel_filename=config['data'].get('target_vel_filename'),
+                             white_sdf_filename=config['data'].get('white_sdf_filename'),
+                             white_surf_filename=config['data'].get('white_surf_filename'),
                              preload=False)
         print(f"Dataset size: {len(dataset)}")
 
@@ -266,5 +350,11 @@ if __name__ == "__main__":
             print(f"Target vel shape:   {tuple(v.shape)} {v.dtype}  "
                   f"(present: {sample['has_target_vel']}, "
                   f"|v| max {v.abs().max().item():.4f})")
+        if 'white_sdf' in sample:
+            s, w = sample['white_sdf'], sample['white_verts']
+            print(f"White SDF shape:    {tuple(s.shape)} {s.dtype}  "
+                  f"(mm range [{s.min().item():.1f}, {s.max().item():.1f}])")
+            print(f"White verts shape:  {tuple(w.shape)} {w.dtype}  "
+                  f"(norm range [{w.min().item():.3f}, {w.max().item():.3f}])")
     else:
         print("Test data not found. Check paths in config.yaml.")

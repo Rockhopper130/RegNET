@@ -89,10 +89,11 @@ class BandLimitedHead(nn.Module):
 
         v = lp96(base_conv(d1)) + up(res_conv(d2))
 
-      base     1x1 conv on the final decoder features (128³), through a FIXED
-               parameterless trilinear down-up filter at 96³. Content below
-               wavelength ~2.67 voxels — the band that carries most of the mesh
-               self-intersection — cannot be emitted at all, on any input.
+      base     1x1 conv on the final decoder features, through a FIXED
+               parameterless trilinear down-up filter at lowpass_size³ = 3/4 of
+               the grid (96³ at 128³ input). Content above that band — the
+               band that carries most of the mesh self-intersection — cannot
+               be emitted at all, on any input.
       residual 1x1 conv on the second decoder level (dec2, already 64³),
                ZERO-initialised and trilinearly upsampled: the learned stand-in
                for the combo's optimized 64³ delta, which also starts at zero.
@@ -146,7 +147,8 @@ class UNet(nn.Module):
     single 3-channel band-limited velocity from dec1 + dec2 instead of the
     6-channel (fw, rv) pair.
     """
-    def __init__(self, in_channels=10, out_channels=6, head='default'):
+    def __init__(self, in_channels=10, out_channels=6, head='default',
+                 lowpass_size=96):
         super().__init__()
         self.head = head
 
@@ -172,7 +174,8 @@ class UNet(nn.Module):
 
         # Flow head — near-zero init so initial flow ≈ 0 → warp starts at identity.
         if head == 'bandlimited':
-            self.vel_head = BandLimitedHead(base_channels=32, res_channels=64)
+            self.vel_head = BandLimitedHead(base_channels=32, res_channels=64,
+                                             lowpass_size=lowpass_size)
         else:
             self.out_conv = nn.Conv3d(32, out_channels, kernel_size=1)
             nn.init.normal_(self.out_conv.weight, 0, 1e-3)
@@ -308,7 +311,9 @@ class SegRegistrationNet(nn.Module):
         if use_affine:
             self.affine_net = AffineNet(in_channels=2 * seg_channels)
 
-        self.unet = UNet(in_channels=2 * seg_channels, out_channels=6, head=head)
+        # band limit = 3/4 of the grid: 96 at 128³ (all existing checkpoints), 144 at 192³
+        self.unet = UNet(in_channels=2 * seg_channels, out_channels=6, head=head,
+                          lowpass_size=target_size[0] * 3 // 4)
         self.stn = SpatialTransformer(size=target_size)
 
     def forward(self, template_seg, sample_seg, return_velocity=False):

@@ -17,6 +17,19 @@ Distillation (optional): set `data.target_vel_filename` and
 onto the per-subject band-limited "combo" velocity, with the affine branch
 frozen — see bandlimit_opt/config_distill.yaml.
 
+Surface distance (optional): set `data.white_sdf_filename` /
+`white_surf_filename` / `template_white_sdf_path` and the run additionally
+scores the deformed white surfaces in mm against precomputed signed-distance
+volumes (utils/make_white_sdf.py) — the deliverable's own metric, which voxel
+Dice on a 128³ grid cannot see. See config_meshsup.yaml.
+
+Mesh regularisers (optional, on top of the surface terms): non-zero
+`loss.mesh_edge` / `mesh_lap` / `mesh_normal` push the FULL template mesh
+every step and penalise edge-length, Laplacian and dihedral distortion in
+excess of the affine-aligned template's own — the per-subject refinement's
+three terms (bandlimit_opt/instance_opt_surface.py), amortised into the net.
+See config_meshsup.yaml.
+
 Evaluation: Dice on warped template seg vs sample seg (the GT target),
 plus per-voxel folding diagnostics via the Jacobian determinant.
 
@@ -30,6 +43,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 import numpy as np
+import nibabel as nib
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import sys
@@ -46,7 +60,8 @@ from tqdm import tqdm
 
 from model import (SegRegistrationNet, SpatialTransformer,
                    load_bandlimited_warm_start)
-from losses import SegRegistrationLoss, compute_dice_score, jacobian_det
+from losses import (MESH_TERMS, SegRegistrationLoss, compute_dice_score,
+                    jacobian_det, mesh_structure, sample_sdf)
 from get_data import SegDataset
 from git_provenance import write_git_sha
 
@@ -84,6 +99,15 @@ class Config:
         # Per-subject distillation target velocity. None/empty -> no vel_mse
         # term, i.e. plain training.
         self.target_vel_filename = cfg['data'].get('target_vel_filename') or None
+        # Surface-distance supervision. All three must be set for the surface
+        # terms to be active; None/empty on any of them -> surface loss off.
+        self.white_sdf_filename = cfg['data'].get('white_sdf_filename') or None
+        self.white_surf_filename = cfg['data'].get('white_surf_filename') or None
+        self.template_white_sdf_path = cfg['data'].get('template_white_sdf_path') or None
+        self.template_wm_mesh_path = cfg['data'].get('template_wm_mesh_path') or None
+        # Medial-wall masks for the surface terms (optional; null = score
+        # every vertex, including the artificial inter-hemispheric cut).
+        self.cortex_labels_dir = cfg['data'].get('cortex_labels_dir') or None
 
         # Output
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -125,8 +149,13 @@ class Config:
         self.device = cfg['device']['gpu'] if torch.cuda.is_available() else "cpu"
         self.cudnn_benchmark = cfg['device'].get('cudnn_benchmark', True)
 
-        # Resume
+        # Resume. weights_only takes the checkpoint's weights and nothing else
+        # (fresh optimizer, epoch 1, best dice 0) — the right mode when the
+        # loss configuration changes, since the old Adam moments and best-Dice
+        # bar belong to a different objective. Unrelated to torch.load's
+        # like-named argument.
         self.resume_from = cfg['resume']['checkpoint_path']
+        self.resume_weights_only = cfg['resume'].get('weights_only', False)
 
         # Reproducibility
         self.seed = cfg.get('seed', 42)
@@ -260,17 +289,28 @@ def log_loss_components_artifact(epoch, train_components, val_components,
         logger.info(f"  Val   - Top contributors: {' | '.join(parts)}")
 
 
-def safe_save(obj, path, logger=None, timeout=300):
-    """torch.save with a hard timeout so NFS hangs don't kill the run."""
+def safe_save(obj, path, logger=None, timeout=600):
+    """torch.save with a hard timeout so NFS hangs don't kill the run.
+
+    Writes to `<path>.tmp` and renames on success. A timed-out save used to
+    leave a truncated file under the real name (two timeouts in the surface
+    run on this NFS), so a best_model.pth could be unloadable; now the
+    previous good checkpoint survives a skipped save.
+    """
+    tmp = f"{path}.tmp"
     try:
         with _timeout(timeout):
-            torch.save(obj, path)
+            torch.save(obj, tmp)
+            os.replace(tmp, path)
     except TimeoutError as e:
         if logger:
             logger.warning(f"Checkpoint save timed out ({path}): {e} — skipping")
     except Exception as e:
         if logger:
             logger.warning(f"Checkpoint save failed ({path}): {e} — skipping")
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 # =============================================================================
@@ -320,6 +360,181 @@ def _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn):
     return warped
 
 
+def _sample_field(field, pts):
+    """Sample a (1, 3, D, H, W) flow at pts (N, 3 normalized x, y, z) -> (N, 3).
+
+    Byte-for-byte utils/visualize_mesh.sample_field — the eval-time mesh push
+    must be the very operation trained here. align_corners=False matches the
+    SpatialTransformer; padding_mode='border' keeps a vertex near the FOV edge
+    from being handed a zero displacement. Duplicated rather than imported
+    because visualize_mesh pulls matplotlib and the whole inference stack in
+    at import time.
+    """
+    g = pts.view(1, -1, 1, 1, 3)
+    s = F.grid_sample(field, g, mode='bilinear', padding_mode='border',
+                      align_corners=False)
+    return s.squeeze(0).squeeze(-1).squeeze(-1).permute(1, 0)
+
+
+def _apply_affine_pts(pts, affine_matrix):
+    """Apply a (1, 3, 4) affine to points (N, 3): p -> R·p + t.
+
+    affine_grid is itself a PULL — aligned(x) = template(A·[x;1]) — so this
+    forward map carries an affine-aligned coordinate into template space, and
+    composing it with _invert_affine goes the other way (a template point p
+    sits at A^-1·p in the space the dense field is defined on).
+    """
+    if affine_matrix is None:
+        return pts
+    A = affine_matrix[0]
+    return pts @ A[:, :3].T + A[:, 3]
+
+
+def _surface_points(tpl_verts, gt_verts, flow_fw, flow_rv, affine_matrix):
+    """Both deformed white-vertex sets, in the grid coords their SDF is on.
+
+    template -> subject is the deliverable itself: identical to
+    utils/visualize_mesh.push_from_flows' 'rv' mode, which is what inference
+    ships. subject -> template mirrors _warp_template, whose forward map
+    resamples the template at A·(x + u_fw(x)) — so a subject point x lands at
+    that same coordinate in template space. The affine-aligned template
+    vertices come back too: the mesh regularisers' reference.
+    """
+    inv = _invert_affine(affine_matrix) if affine_matrix is not None else None
+    v_a = _apply_affine_pts(tpl_verts, inv)
+    t2s = v_a + _sample_field(flow_rv, v_a)
+
+    q = gt_verts + _sample_field(flow_fw, gt_verts)
+    s2t = _apply_affine_pts(q, affine_matrix)
+    return t2s, s2t, v_a
+
+
+def _surface_batch(ctx, batch, flow_fw, flow_rv, affine_matrix, device):
+    """The `surf` dict losses.SegRegistrationLoss scores, or None when the
+    surface terms are off.
+
+    fp32 throughout, and the SDF is cast on the GPU: the dataset caches it as
+    float16 to keep 413 subjects in RAM, but a normalized coordinate in half
+    precision quantises to ~0.13 mm on a 256³ grid — the scale of the term.
+
+    The whole template mesh is pushed, medial wall included: the surface term
+    scores its cortex subset, while the mesh regularisers (when on) need every
+    vertex — edges, Laplacian neighbours and face pairs cross the mask.
+    """
+    if ctx is None:
+        return None
+
+    if batch['white_sdf'].shape[0] != 1:
+        raise ValueError(
+            "the surface terms need batch_size 1 — one subject SDF and one "
+            f"vertex set per step; got batch {batch['white_sdf'].shape[0]}")
+
+    sdf_subj = batch['white_sdf'].to(device).float()          # (1, 1, D, H, W)
+    gt_verts = batch['white_verts'][0].to(device)
+    if ctx['cortex'] is not None:
+        gt_verts = gt_verts[ctx['cortex']]
+
+    t2s, s2t, tpl_aligned = _surface_points(
+        ctx['tpl_verts'], gt_verts, flow_fw.float(), flow_rv.float(),
+        None if affine_matrix is None else affine_matrix.float())
+
+    surf = {'sdf_subj': sdf_subj,
+            'pts_t2s': t2s if ctx['cortex'] is None else t2s[ctx['cortex']],
+            'sdf_tpl': ctx['sdf_tpl'], 'pts_s2t': s2t}
+    if ctx['mesh'] is not None:
+        # Reference = the affine-aligned template, as in the refinement (whose
+        # affine was frozen). The reference here is detached, but the pushed
+        # mesh still depends on the predicted affine, so the mesh terms also
+        # backprop into the affine branch; the gradient vanishes at zero
+        # excess distortion.
+        surf['mesh'] = (t2s, tpl_aligned.detach(), ctx['mesh'])
+    return surf
+
+
+# fsaverage-164k medial-wall masks (per-vertex 1 = cortex, 0 = medial wall),
+# the same pair utils/push_optimized_mesh.py scores its cortex-only distances
+# with.
+CORTEX_LABEL_FILES = (
+    'tpl-fsaverage_den-164k_hemi-L_desc-nomedialwall_dparc.label.gii',
+    'tpl-fsaverage_den-164k_hemi-R_desc-nomedialwall_dparc.label.gii')
+
+
+def _load_cortex_mask(labels_dir, logger):
+    """Joined lh+rh cortex mask (True = cortical vertex), or None when either
+    label file is absent. Read here rather than imported from
+    utils/push_optimized_mesh.load_cortex_mask, which would drag matplotlib
+    and the whole eval stack into the training process."""
+    masks = []
+    for fname in CORTEX_LABEL_FILES:
+        path = Path(labels_dir).expanduser() / fname
+        if not path.is_file():
+            logger.warning(f"no cortex label {path}")
+            return None
+        masks.append(nib.load(str(path)).darrays[0].data > 0)
+    return np.concatenate(masks)
+
+
+def _load_surface_ctx(config, subject_verts_len, logger):
+    """Template-side surface constants, loaded once: its vertices, its SDF and
+    (when the mesh regularisers are weighted) its mesh structure.
+
+    They are shared by every subject (one template, one mesh), so they live on
+    the device for the whole run instead of being collated per batch. The
+    cortex mask drops medial-wall vertices — an artificial cut where the closed
+    white surface runs through tissue that has no white/grey boundary at all,
+    so a distance there scores a labelling convention, not registration.
+    """
+    if not config.white_sdf_filename:
+        return None
+    if not (config.white_surf_filename and config.template_white_sdf_path
+            and config.template_wm_mesh_path):
+        raise ValueError(
+            "data.white_sdf_filename is set, so the surface terms also need "
+            "data.white_surf_filename (the subject vertices), "
+            "data.template_white_sdf_path and data.template_wm_mesh_path "
+            "(the subject->template direction is scored against those two).")
+
+    device = torch.device(config.device)
+    with np.load(config.template_wm_mesh_path) as mesh_npz:
+        verts_norm, mesh_faces = mesh_npz['verts_norm'], mesh_npz['faces']
+    tpl_verts = torch.tensor(verts_norm, dtype=torch.float32, device=device)
+    sdf_tpl = torch.tensor(np.load(config.template_white_sdf_path),
+                           dtype=torch.float32, device=device)[None, None]
+
+    cortex = None
+    if config.cortex_labels_dir:
+        mask = _load_cortex_mask(config.cortex_labels_dir, logger)
+        # The mask is fsaverage ico7 indexed and so are both meshes; a length
+        # mismatch means it indexes something else, and applying it would
+        # score the wrong vertices rather than fewer of them.
+        if mask is None or not len(mask) == len(tpl_verts) == subject_verts_len:
+            logger.warning(
+                f"cortex mask unusable (mask "
+                f"{None if mask is None else len(mask)} entries vs template "
+                f"{len(tpl_verts)} / subject {subject_verts_len} vertices) — "
+                f"scoring every vertex, medial wall included")
+        else:
+            cortex = torch.tensor(mask, device=device)
+            logger.info(f"Cortex mask: {int(mask.sum()):,}/{len(mask):,} vertices "
+                        f"scored (medial wall dropped)")
+
+    mesh = None
+    if any(config.loss_weights.get(k, 0.0) for k in MESH_TERMS):
+        # mm per normalized unit of the template grid, from the seg .npy's
+        # .nii.gz sibling — utils/visualize_mesh.mm_per_norm, the refinement's
+        # scale, duplicated so train.py does not import the eval stack.
+        ref = nib.load(config.template_seg_path.replace('_onehot.npy', '.nii.gz'))
+        mm = float(np.mean(np.linalg.norm(ref.affine[:3, :3], axis=0) * ref.shape[:3]) / 2)
+        mesh = mesh_structure(mesh_faces, len(tpl_verts), mm, device)
+        logger.info(f"Mesh regularisers: {len(mesh['edges']):,} edges | "
+                    f"{len(mesh['pairs']):,} face pairs | {mm:.1f} mm/norm")
+
+    logger.info(f"Surface terms: template {tuple(tpl_verts.shape)} verts, "
+                f"SDF grids {tuple(sdf_tpl.shape[2:])} (template) / "
+                f"{config.white_sdf_filename} (subject)")
+    return {'tpl_verts': tpl_verts, 'sdf_tpl': sdf_tpl, 'cortex': cortex, 'mesh': mesh}
+
+
 def _accumulate_lambda_stats(stats_sum, lambda_map):
     """Per-batch mean/std/p05/p95 of the λ map, accumulated into stats_sum.
 
@@ -334,7 +549,8 @@ def _accumulate_lambda_stats(stats_sum, lambda_map):
     stats_sum['p95']  += lam.quantile(0.95).item()
 
 
-def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoch, config):
+def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoch,
+                config, surface_ctx=None):
     model.train()
 
     total_loss = 0
@@ -363,11 +579,17 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
             warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
             warped_seg_rv = _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn)
 
+            # Mesh geometry outside autocast: sub-voxel vertex coordinates do
+            # not survive half precision (see _surface_batch).
+            with torch.cuda.amp.autocast(enabled=False):
+                surf = _surface_batch(surface_ctx, batch, flow_fw, flow_rv,
+                                      affine_matrix, device)
+
             loss, loss_dict = loss_fn(
                 warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
                 flow_fw, flow_rv, lambda_map,
                 affine_matrix=affine_matrix,
-                pred_vel=pred_vel, target_vel=target_vel,
+                pred_vel=pred_vel, target_vel=target_vel, surf=surf,
                 return_components=True,
             )
 
@@ -401,11 +623,13 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
 
 
 @torch.no_grad()
-def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config):
+def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config,
+                   surface_ctx=None):
     model.eval()
 
     total_loss = 0
     total_dice = 0
+    total_surface_t2s = 0
     total_folding_pct = 0
     total_fold_voxels = 0
     worst_min_det = float('inf')
@@ -439,11 +663,23 @@ def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config):
         warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
         warped_seg_rv = _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn)
 
+        # Val surfaces are the honest held-out mesh number, so they are scored
+        # here too (unlike the distillation target, which is train-only).
+        surf = _surface_batch(surface_ctx, batch, flow_fw, flow_rv,
+                              affine_matrix, device)
+
         loss, loss_dict = loss_fn(
             warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
             flow_fw, flow_rv, lambda_map,
-            affine_matrix=affine_matrix, return_components=True,
+            affine_matrix=affine_matrix, surf=surf, return_components=True,
         )
+
+        if surf is not None:
+            # The template->subject direction alone: the pushed mesh's own
+            # distance, comparable to the eval tools' sym_mean_mm. The loss
+            # component is the two-direction sum.
+            total_surface_t2s += sample_sdf(
+                surf['sdf_subj'], surf['pts_t2s']).abs().mean().item()
 
         total_loss += loss.item()
         # Since dice is symmetric, we can average them for reporting, or just use loss_dict['dice']/2.
@@ -469,6 +705,7 @@ def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config):
         'loss': total_loss / num_batches,
         'dice': total_dice / num_batches,
         'dice_per_class': avg_dice_per_class,
+        'surface_t2s_mm': total_surface_t2s / num_batches,
         'folding_pct': total_folding_pct / num_batches,
         'fold_voxels_total': total_fold_voxels,
         'worst_min_det': worst_min_det,
@@ -525,6 +762,18 @@ def main():
     logger.info(f"  supervision on : {config.seg_filename}")
     if config.target_vel_filename:
         logger.info(f"  distill target : {config.target_vel_filename}  (train only)")
+    if config.white_sdf_filename:
+        logger.info(f"  surface target : {config.white_sdf_filename} + "
+                    f"{config.white_surf_filename}  (train and val)")
+
+    # Same discipline as SegDataset's per-subject _require: a typo in one of
+    # the template-side paths must not cost a full ~28 GB preload first.
+    if config.white_sdf_filename:
+        for key in ('template_white_sdf_path', 'template_wm_mesh_path',
+                    'cortex_labels_dir'):
+            path = getattr(config, key)
+            if path and not os.path.exists(path):
+                raise FileNotFoundError(f"data.{key} does not exist: {path}")
 
     # The distillation targets exist for training subjects only — val is
     # deliberately target-free so its Dice stays an honest held-out number.
@@ -534,12 +783,16 @@ def main():
         seg_filename=config.seg_filename,
         input_seg_filename=config.input_seg_filename,
         target_vel_filename=config.target_vel_filename,
+        white_sdf_filename=config.white_sdf_filename,
+        white_surf_filename=config.white_surf_filename,
     )
     val_dataset = SegDataset(
         config.val_txt, config.template_seg_path,
         target_size=config.target_size,
         seg_filename=config.seg_filename,
         input_seg_filename=config.input_seg_filename,
+        white_sdf_filename=config.white_sdf_filename,
+        white_surf_filename=config.white_surf_filename,
     )
 
     train_loader = DataLoader(
@@ -553,6 +806,12 @@ def main():
 
     logger.info(f"Train samples: {len(train_dataset)} | Val samples: {len(val_dataset)}")
     logger.info(f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)}")
+
+    surface_ctx = _load_surface_ctx(
+        config,
+        len(train_dataset[0]['white_verts']) if config.white_sdf_filename else 0,
+        logger,
+    )
 
     # ==========================================================================
     # Model Setup
@@ -599,8 +858,15 @@ def main():
     # Resume
     start_epoch = 1
     best_dice = 0.0
+    best_surface = float('inf')
 
-    if config.resume_from and os.path.exists(config.resume_from):
+    if config.resume_from:
+        if not os.path.exists(config.resume_from):
+            # Used to fall through and train from random weights: a typo in
+            # this path silently cost a whole run.
+            raise FileNotFoundError(
+                f"resume.checkpoint_path does not exist: {config.resume_from} "
+                f"(set it to null to train from scratch)")
         logger.info(f"Resuming from: {config.resume_from}")
         # weights_only=False: our checkpoints contain numpy scalars in metrics.
         checkpoint = torch.load(config.resume_from, map_location=device, weights_only=False)
@@ -613,11 +879,25 @@ def main():
             logger.info("Warm-started the band-limited head from the old "
                         "6-channel out_conv (residual branch zero, optimizer "
                         "state and epoch counter discarded)")
+        elif config.resume_weights_only:
+            # Same architecture, new objective: adding a loss term makes the
+            # checkpoint's Adam moments and its best-Dice bar meaningless, so
+            # weights are all that carries over.
+            # The STN's identity grid is a resolution-tied buffer, not a weight:
+            # take the model's own so a 128³ checkpoint warm-starts a 192³ net.
+            state_dict['stn.id_grid'] = model.stn.id_grid
+            model.load_state_dict(state_dict)
+            logger.info("resume.weights_only: loaded model weights only "
+                        "(fresh optimizer, epoch counter back to 1, best dice "
+                        "reset to 0)")
         else:
             model.load_state_dict(state_dict)
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             start_epoch = checkpoint['epoch'] + 1
             best_dice = checkpoint.get('best_dice', 0.0)
+            # Both bars carry over, or the first epoch of a resumed run
+            # overwrites best_surface.pth with whatever it happens to score.
+            best_surface = checkpoint.get('best_surface', float('inf'))
             logger.info(f"Resumed from epoch {start_epoch - 1}, best dice: {best_dice:.4f}")
 
     # ==========================================================================
@@ -636,16 +916,19 @@ def main():
         current_lr = scheduler.step(epoch - 1)
 
         train_metrics = train_epoch(
-            model, stn, train_loader, loss_fn, optimizer, scaler, device, epoch, config,
+            model, stn, train_loader, loss_fn, optimizer, scaler, device, epoch,
+            config, surface_ctx,
         )
         val_metrics = validate_epoch(
-            model, stn, val_loader, loss_fn, device, epoch, config,
+            model, stn, val_loader, loss_fn, device, epoch, config, surface_ctx,
         )
 
         epoch_time = time.time() - epoch_start
 
         logger.info("-" * 70)
-        logger.info(f"Epoch {epoch}/{config.num_epochs} | Time: {epoch_time:.1f}s | LR: {current_lr:.2e}")
+        mem = (f" | Peak mem: {torch.cuda.max_memory_allocated(device) / 2**30:.1f} GiB"
+               if 'cuda' in config.device else "")
+        logger.info(f"Epoch {epoch}/{config.num_epochs} | Time: {epoch_time:.1f}s | LR: {current_lr:.2e}{mem}")
         logger.info(f"  Train - Loss: {train_metrics['loss']:.5f} | Dice: {train_metrics['dice']:.4f}")
         logger.info(f"  Val   - Loss: {val_metrics['loss']:.5f} | Dice: {val_metrics['dice']:.4f}")
         logger.info(
@@ -654,6 +937,21 @@ def main():
             f"Worst voxel: {val_metrics['worst_min_det']:.3f} "
             f"(subject idx {val_metrics['worst_min_det_subject']})"
         )
+        if surface_ctx is not None:
+            logger.info(
+                f"  Val   - Surface: mean {val_metrics['components']['surface']:.3f} mm "
+                f"| tail {val_metrics['components']['surface_tail']:.3f} mm "
+                f"| t2s mean {val_metrics['surface_t2s_mm']:.3f} mm "
+                f"(mean/tail sum both directions; t2s alone is the pushed mesh)"
+            )
+            if surface_ctx['mesh'] is not None:
+                for tag, m in (('Train', train_metrics), ('Val  ', val_metrics)):
+                    c = m['components']
+                    logger.info(
+                        f"  {tag} - Mesh: edge {c['mesh_edge']:.4f} "
+                        f"| lap {c['mesh_lap']:.4f} mm | normal {c['mesh_normal']:.4f} "
+                        f"(unweighted excess over the affine-aligned template)"
+                    )
         ls = val_metrics['lambda_stats']
         logger.info(
             f"  Val   - Lambda: mean={ls['mean']:.3f} std={ls['std']:.3f} "
@@ -681,7 +979,17 @@ def main():
         else:
             epochs_without_improvement += 1
 
-        if is_best or epoch % config.save_every == 0:
+        # Surface distance gets its own best checkpoint: it and Dice do not
+        # peak on the same epoch (one is a volume overlap on a 128³ grid, the
+        # other the surface in mm), and the mesh is what ships. Early stopping
+        # still follows Dice.
+        is_best_surface = (surface_ctx is not None
+                           and val_metrics['components']['surface'] < best_surface)
+        if is_best_surface:
+            best_surface = val_metrics['components']['surface']
+            logger.info(f"  New best surface! {best_surface:.3f} mm")
+
+        if is_best or is_best_surface or epoch % config.save_every == 0:
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -690,9 +998,12 @@ def main():
                 'val_loss': val_metrics['loss'],
                 'val_dice': val_metrics['dice'],
                 'best_dice': best_dice,
+                'best_surface': best_surface,
             }
             if is_best:
                 safe_save(checkpoint, os.path.join(config.checkpoint_dir, "best_model.pth"), logger)
+            if is_best_surface:
+                safe_save(checkpoint, os.path.join(config.checkpoint_dir, "best_surface.pth"), logger)
             if epoch % config.save_every == 0:
                 safe_save(
                     checkpoint,
@@ -714,6 +1025,8 @@ def main():
     logger.info("=" * 70)
     logger.info(f"Total time: {total_time / 3600:.2f} hours")
     logger.info(f"Best validation Dice: {best_dice:.4f}")
+    if surface_ctx is not None:
+        logger.info(f"Best validation surface: {best_surface:.3f} mm (both directions)")
     logger.info(f"Checkpoints: {config.checkpoint_dir}")
     logger.info(f"Logs: {log_file}")
 
