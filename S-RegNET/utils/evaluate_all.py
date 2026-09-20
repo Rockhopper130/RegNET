@@ -16,11 +16,14 @@ Per subject:
          inverse_over_0p2mm_pct
          (genus-0 template mesh pushed to the subject vs its own FreeSurfer
           white surface; skipped per subject when the surfaces are missing)
-         lh is scored against lh and rh against rh, and the headline
-         sym_{mean,hd95,max}_mm is the AVERAGE of the two hemisphere scores. A
+         lh is matched against lh and rh against rh, and the headline
+         sym_{mean,hd95,max}_mm scores the POOLED lh+rh distances (a percentile
+         of the union, not the average of two percentiles — the average is not a
+         percentile of anything, and averaging two maxima is not a maximum). A
          single KD-tree over the joined mesh would let a medial vertex match the
          opposite hemisphere (their walls sit ~1-3 mm apart) and flatter the tail;
          the *_hemi_blind columns are that old joined match, kept to size the bias.
+         hd95 is the default name; --hd_percentile P renames the column to hdP.
          undeformed_* is symmetric like the deformed metric, so before/after are
          now like-for-like — it used to be one-directional and thus not comparable.
   --self_int adds si_faces{,_pct}, si_pairs, si_clusters, si_largest — the
@@ -113,8 +116,9 @@ def sym_dist(mesh_w, gt_w, n_lh, gt_n_lh):
     across the interhemispheric fissure, ~1-3 mm apart. One KD-tree over the joined
     point cloud therefore lets a medial lh vertex match an rh triangle and report a
     small distance for a vertex that landed on the wrong side of the brain — an
-    optimistic bias concentrated exactly in the tail the HD95 reads. lh is scored
-    against lh, rh against rh, and the two hemisphere scores are averaged."""
+    optimistic bias concentrated exactly in the tail the HD95 reads. lh is matched
+    against lh and rh against rh; hemi_scores pools the four arrays for the
+    headline number and keeps the per-hemisphere ones alongside."""
     out = []
     for m, g in ((slice(0, n_lh), slice(0, gt_n_lh)),
                  (slice(n_lh, None), slice(gt_n_lh, None))):
