@@ -170,7 +170,73 @@ Every deviation from `config.yaml` is commented inside `config_distill.yaml`.
 Evaluate the result with section 3 (val subjects have no targets, so their
 numbers are honest).
 
-## 5. How the model works
+## 5. Surface + mesh supervision (192³)
+
+The pushed template mesh is scored as a mesh, not as voxels: a symmetric
+surface distance plus three mesh regularisers, all built from the subject's
+SynthSeg segmentation at deployment (no ground truth needed). At 192³ this is
+a fine-tune of the existing net; per subject it is the 50-step refinement's
+objective. The tuned 50-step arm takes mesh↔GT symmetric mean 0.91 → 0.66 mm,
+HD95 2.26 → 1.74 mm and self-intersecting faces 0.047 % → 0.005 % at n = 10,
+for 0.882 → 0.856 WM Dice.
+
+The objective:
+
+```
+L(δ) = w_d·Dice + w_ce·CE                                      voxel data term, unchanged
+     + w_f ·[ mean|S_in(φ(V))|   + ½·mean top-5% ]               template → subject
+     + w_r ·[ mean|S_tpl(φ⁻¹(P))| + ½·mean top-5% ]               subject → template
+     + w_e · mean (log |e'|/|e|)²                                 edge-length ratio
+     + w_l · mean relu(|Δ'v| − |Δv|)                              Laplacian excess
+     + w_n · mean relu((1 − n'a·n'b) − (1 − na·nb))               normal excess
+     + bending(δ) + jacobian(δ)                                   velocity terms, unchanged
+```
+
+`S_in` is the signed distance to the SynthSeg WM mask (EDT, Gaussian σ 0.75
+vox, clamp ±10 mm). `S_tpl` is the precomputed distance to the template's
+white surface. `V` is the template vertices, `P` the subject's WM↔cortex
+interface points (marching cubes on the smoothed WM mask at 0.5, kept where
+the smoothed cortex channel > 0.2). The mesh terms are excess over the
+affine-aligned template, so the template's own curvature is free.
+
+**Data prep and training:**
+
+```bash
+python utils/make_white_sdf.py --lists train,val --template --workers 32 \
+    --output_dir ~/shared_scratch/meshsup_v2/sdf_qc     # ~0.5 GB RAM/worker
+python train.py --config config_meshsup.yaml
+```
+
+The generator writes `white_sdf_v1.npy` + `white_surf_v1.npz` next to each
+subject's segs and the template SDF beside the template mesh (the data is
+already on the cluster; it is only re-run for new subjects). The run
+warm-starts the 192³ checkpoint weights-only and writes both
+`best_model.pth` (val Dice) and `best_surface.pth` (val surface) —
+`best_surface.pth` is the one to evaluate.
+
+**Refinement and evaluation:**
+
+```bash
+python bandlimit_opt/instance_opt_surface.py --checkpoint <ckpt> --config config_meshsup.yaml \
+    --num_subjects 10 --arms dice@50,symM@50 --coarse_levels 96 --lowpass_init 144 \
+    --output_dir <out> --device cuda:0
+python utils/push_optimized_mesh.py --probe_dir <out> --config config_meshsup.yaml \
+    --output_dir <out>/mesh_eval --arms baseline,dice50,symM50 --device cuda:0 \
+    --cortex_labels_dir /shared/scratch/0/home/v_nishchay_nilabh/bandlimit_opt/fsaverage_labels
+python utils/dir_split.py <out>/mesh_eval --config config_meshsup.yaml
+```
+
+`symM`'s defaults are the tuned arm (Dice ×2, surface weights annealed over
+25 steps, top-10 % tails, every interface point); `dice` is the deployed
+baseline and `dsdf` / `sym` are the one-sided and no-mesh-regulariser
+ablations — run with the same tuned knobs as `symM` (Dice ×2, anneal 25,
+top-10 % tails, all points), so they are ablations of the tuned arm and not
+comparable to older sweep rows; 50 steps is the knee at ~9 s per subject.
+`summary.json` carries `sym_mean_mm` / `sym_hd95_mm` / `si_faces_pct`,
+`arms.csv` the WM Dice and folding, `dir_split` the template→GT vs
+GT→template split.
+
+## 6. How the model works
 
 - **Input**: template one-hot (5 ch) ⊕ subject one-hot (5 ch) = 10 channels.
   An `AffineNet` pre-aligns the template first; a 3D U-Net then predicts a
@@ -198,20 +264,24 @@ numbers are honest).
   the template's, so handles/components are the template's for every subject.
   Self-intersection is the one thing that can still fail — that is the metric.
 
-## 6. File map
+## 7. File map
 
 | file | role |
 |---|---|
 | `config.yaml` / `bandlimit_opt/config_distill.yaml` | baseline run / distilled run (source of truth) |
+| `config_meshsup.yaml` | 192³ surface + mesh supervised fine-tune (§5) |
 | `model.py` | `AffineNet`, `UNet`, `BandLimitedHead`, `SegRegistrationNet`, `SpatialTransformer`, warm-start loader |
-| `losses.py` | Dice, CE, bending, Jacobian, displacement, λ terms, `vel_mse`; `SegRegistrationLoss` |
-| `get_data.py` | `SegDataset`: one-hot loading, nearest resize to 128³, optional `target_vel` |
+| `losses.py` | Dice, CE, bending, Jacobian, displacement, λ terms, `vel_mse`, surface + mesh regularisers (§5); `SegRegistrationLoss` |
+| `get_data.py` | `SegDataset`: one-hot loading, nearest resize to 128³, optional `target_vel`, white SDF pair (§5) |
 | `train.py` | training loop, AMP, warm-up cosine LR, checkpoints, provenance |
 | `inference.py` | single-subject inference; `setup_inference` is reused by every tool |
 | `convert_one_hot.py`, `convert_synthseg_one_hot.py`, `label_mapping.py` | data generation |
+| `utils/make_white_sdf.py` | signed-distance volumes to each white surface — the surface loss's target |
 | `bandlimit_opt/instance_opt_bandlimited.py` | the 50-step refinement (and the 300-step fit) |
+| `bandlimit_opt/instance_opt_surface.py` | the 50-step refinement with the surface + mesh objective (arms `dice`/`dsdf`/`sym`/`symM`) |
 | `bandlimit_opt/generate_distill_targets.py` | distillation targets over `train.txt` |
 | `utils/push_optimized_mesh.py` | template mesh → subject space; self-int, flips, mm distance |
+| `utils/dir_split.py` | m2g / g2m direction split of the mesh distances |
 | `bandlimit_opt/render_deformed_mesh.py` | 3D renders + slice overlays of pushed meshes |
 | `utils/topology_before_after.py` | handles/components: SynthSeg surface vs pushed mesh |
 | `utils/repair_template_mesh.py` | one-off template surface repair |
