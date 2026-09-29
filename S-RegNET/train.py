@@ -44,6 +44,7 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 import numpy as np
 import nibabel as nib
+import ssl_terms
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import sys
@@ -102,6 +103,12 @@ class Config:
         # Surface-distance supervision. All three must be set for the surface
         # terms to be active; None/empty on any of them -> surface loss off.
         self.white_sdf_filename = cfg['data'].get('white_sdf_filename') or None
+        _ssl = cfg.get('ssl', {}) or {}
+        self.ssl_inject = float(_ssl.get('mesh_injectivity', 0.0))
+        self.ssl_inject_h = float(_ssl.get('inject_step_vox', 0.25))
+        self.ssl_inject_margin = float(_ssl.get('inject_margin', 0.1))
+        self.ssl_equivar = float(_ssl.get('equivariance', 0.0))
+        self.ssl_equivar_amp = float(_ssl.get('equivariance_amp', 0.03))
         self.white_surf_filename = cfg['data'].get('white_surf_filename') or None
         self.template_white_sdf_path = cfg['data'].get('template_white_sdf_path') or None
         self.template_wm_mesh_path = cfg['data'].get('template_wm_mesh_path') or None
@@ -549,9 +556,39 @@ def _accumulate_lambda_stats(stats_sum, lambda_map):
     stats_sum['p95']  += lam.quantile(0.95).item()
 
 
+def _ssl_terms(config, model, stn, surface_ctx, template_seg, input_seg,
+               flow_fw, flow_rv, affine_matrix, device):
+    """Self-supervised additions. Returns (weighted_total, components).
+
+    Uses only the two sanctioned inputs -- the genus-0 template and the SynthSeg
+    one-hot -- plus the model's own output. No label, no new data source.
+    """
+    parts, total = {}, flow_rv.new_zeros((), dtype=torch.float32)
+
+    if config.ssl_inject > 0 and surface_ctx is not None:
+        verts = surface_ctx['tpl_verts'].to(device).float()
+        if affine_matrix is not None:
+            verts = _apply_affine_pts(verts, _invert_affine(affine_matrix.float()))
+        h = config.ssl_inject_h * (2.0 / flow_rv.shape[-1])      # fraction of a voxel
+        li, _ = ssl_terms.mesh_injectivity_loss(
+            flow_rv.float(), verts, h, margin=config.ssl_inject_margin)
+        parts['ssl_inject'] = li.detach()
+        total = total + config.ssl_inject * li
+
+    if config.ssl_equivar > 0:
+        le = ssl_terms.equivariance_loss(model, template_seg, input_seg, flow_fw, stn,
+                                         amp=config.ssl_equivar_amp,
+                                         use_amp=config.use_amp)
+        parts['ssl_equivar'] = le.detach()
+        total = total + config.ssl_equivar * le
+
+    return total, parts
+
+
 def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoch,
                 config, surface_ctx=None):
     model.train()
+    ssl_active = config.ssl_inject > 0 or config.ssl_equivar > 0
 
     total_loss = 0
     total_dice = 0
@@ -592,6 +629,17 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
                 pred_vel=pred_vel, target_vel=target_vel, surf=surf,
                 return_components=True,
             )
+
+            # Self-supervised terms, added here rather than inside
+            # SegRegistrationLoss so the published loss stays byte-identical
+            # when every ssl weight is 0.
+            if ssl_active:
+                with torch.cuda.amp.autocast(enabled=False):
+                    ssl_total, ssl_parts = _ssl_terms(
+                        config, model, stn, surface_ctx, template_seg, input_seg,
+                        flow_fw, flow_rv, affine_matrix, device)
+                loss = loss + ssl_total
+                loss_dict.update(ssl_parts)
 
         # Backward + grad clip + step. unscale BEFORE clip — clip_grad_norm_
         # on scaled grads makes max_norm meaningless under AMP.
