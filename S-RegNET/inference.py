@@ -38,6 +38,8 @@ import yaml
 from pathlib import Path
 from scipy.ndimage import distance_transform_edt, binary_erosion
 
+from label_mapping import remap_to_5class
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -66,17 +68,6 @@ def load_config(config_path=None):
         return yaml.safe_load(f)
 
 
-# FreeSurfer label → 5-class remapping (Background, Cortex, Subcortical GM,
-# White Matter, CSF). Used when --input_seg is a .nii.gz integer-label
-# volume; if the user passes a pre-converted .npy one-hot, this is skipped.
-LABEL_MAPPING = {
-    0: 0, 24: 0,
-    3: 1, 42: 1,
-    10: 2, 49: 2, 11: 3, 50: 2, 12: 2, 51: 2, 13: 2, 52: 2,
-    17: 2, 53: 2, 18: 2, 54: 2, 26: 2, 58: 2, 60: 2, 8: 2, 47: 2,
-    2: 3, 41: 3, 7: 3, 46: 3, 16: 3, 28: 3,
-    4: 4, 43: 4, 5: 4, 44: 4, 14: 4, 15: 4,
-}
 
 
 def load_seg_input(path, target_size, num_classes=5):
@@ -98,10 +89,7 @@ def load_seg_input(path, target_size, num_classes=5):
     else:
         img = nib.load(path)
         data = img.get_fdata().astype(np.int64)
-        remapped = np.zeros_like(data)
-        for src, dst in LABEL_MAPPING.items():
-            remapped[data == src] = dst
-        seg_tensor = torch.tensor(remapped)
+        seg_tensor = torch.tensor(remap_to_5class(data))
         seg = F.one_hot(seg_tensor.long(), num_classes).permute(3, 0, 1, 2).float()
         nifti_affine = img.affine
 
@@ -261,7 +249,7 @@ def plot_contour_overlay(template_seg, sample_seg, warped_seg, save_path, target
     """
     Plots the target mask as a filled white region on a black background,
     with overlaid contours for template, ground truth, and deformed template.
-    target_class=3 corresponds to White Matter in LABEL_MAPPING.
+    target_class=3 corresponds to the white-surface interior in LABEL_MAPPING.
     """
     t_labels = template_seg.squeeze().argmax(dim=0).cpu().numpy()
     s_labels = sample_seg.squeeze().argmax(dim=0).cpu().numpy()

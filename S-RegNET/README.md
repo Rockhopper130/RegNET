@@ -52,26 +52,29 @@ directory per subject:
 
 ```
 $OASIS/scans/OASIS_OAS1_0146_MR1/
-    seg4.nii.gz              GT 5-class seg (0 bg, 1 cortex, 2 subcortical GM, 3 WM, 4 CSF)
-    seg4_onehot.npy          (5, D, H, W) uint8 — the SUPERVISION target   ← convert_one_hot.py
-    synthseg_onehot_v1.npy   (5, D, H, W) uint8 — the network INPUT        ← convert_synthseg_one_hot.py
+    seg35.nii.gz             35-label aseg map — the source the 5-class GT is built from
+    seg4_white.nii.gz        GT 5-class seg (0 bg, 1 cortex, 2 other brain,
+                             3 white-surface interior, 4 CSF)              ← convert_one_hot.py
+    seg4_white_onehot.npy    (5, D, H, W) uint8 — the SUPERVISION target   ← convert_one_hot.py
+    synthseg_white_onehot_v1.npy  (5, D, H, W) uint8 — the network INPUT   ← convert_synthseg_one_hot.py
     distill_vel_v1.npy       (3, 128, 128, 128) float32 — distillation target (train subjects only)
 $OASIS/meshes/OASIS_OAS1_0146_MR1/{lh,rh}.white.surf     FreeSurfer white surfaces (eval only)
 $OASIS/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz   the template mesh
-$OASIS/train.txt, val.txt    one seg4_onehot.npy path per line (330 / 82 subjects)
+$OASIS/train.txt, val.txt    one seg .npy path per line (330 / 82 subjects); only
+                             the subject directory is used, so the filename is stale but harmless
 ```
 
 Regenerate from raw if you bring new subjects (each step writes next to the
 subject's files; the list files only need to name the subject directories):
 
 ```bash
-# GT seg -> one-hot
+# GT: seg35 -> 5-class map + one-hot (class 3 = the white-surface interior)
 python convert_one_hot.py --lists $OASIS/train.txt $OASIS/val.txt
 
-# SynthSeg (FreeSurfer labels) -> 5-class one-hot; label_mapping.py holds the remap
+# SynthSeg (FreeSurfer labels) -> the SAME 5 classes; label_mapping.py holds the remap
 python convert_synthseg_one_hot.py --lists $OASIS/train.txt $OASIS/val.txt \
     --synthseg_dir $OASIS/oasis_synthseg/oasis_data_synthseg_version1 \
-    --synthseg_name norm_synthseg.nii.gz --out_name synthseg_onehot_v1.npy
+    --synthseg_name norm_synthseg.nii.gz --out_name synthseg_white_onehot_v1.npy
 
 # template mesh: FreeSurfer's 0406 ?h.white self-intersects in 660 faces; this moves
 # vertices (never faces) until zero cross, and writes template_wm_mesh_repaired.npz

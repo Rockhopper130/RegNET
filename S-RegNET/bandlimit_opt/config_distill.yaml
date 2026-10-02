@@ -23,13 +23,13 @@ data:
   val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
 
   # Template subject seg (used as moving image for every registration).
-  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
 
   # Template WM mesh, REPAIRED (see config.yaml for the provenance note).
   template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
 
-  seg_filename: "seg4_onehot.npy"
-  input_seg_filename: "synthseg_onehot_v1.npy"
+  seg_filename: "seg4_white_onehot.npy"
+  input_seg_filename: "synthseg_white_onehot_v1.npy"
 
   # DISTILL: per-subject tied velocity v* = lp96(vel_fw) + up(delta*) written
   # by bandlimit_opt/generate_distill_targets.py next to each subject's segs.
@@ -167,8 +167,8 @@ visualization:
   class_names:
     - "Background"
     - "Cortex"
-    - "Subcortical GM"
-    - "White Matter"
+    - "Other Brain"
+    - "White Surface Interior"
     - "CSF"
 
 # -----------------------------------------------------------------------------

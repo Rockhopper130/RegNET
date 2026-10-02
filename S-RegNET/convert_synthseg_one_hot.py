@@ -1,7 +1,9 @@
 """
 Convert per-subject SynthSeg label volumes (.nii.gz FreeSurfer labels) to
-5-class one-hot .npy next to each subject's GT seg4_onehot.npy. Like
-convert_one_hot.py but applies the remap (label_mapping.remap_to_5class) first.
+5-class one-hot .npy next to each subject's GT one-hot. Like convert_one_hot.py
+but starts from FreeSurfer labels, so it applies label_mapping.remap_to_5class
+rather than the seg35 decode — the two land on the same 5 classes, class 3 being
+the white-surface interior.
 
 Stored at native resolution; SegDataset resizes at load time. Subjects come
 from the train/val list files (each line a subject's seg4_onehot.npy path); the
@@ -12,11 +14,12 @@ Usage:
         --lists /path/train.txt /path/val.txt \
         --synthseg_dir /path/oasis_synthseg_output/output \
         --synthseg_name orig_synthseg.nii.gz \
-        --out_name synthseg_onehot.npy
+        --out_name synthseg_white_onehot_v1.npy
 """
 
 import argparse
 import os
+from multiprocessing import Pool
 
 import numpy as np
 import nibabel as nib
@@ -25,6 +28,7 @@ from tqdm import tqdm
 from label_mapping import remap_to_5class
 
 NUM_CLASSES = 5
+GT_NAME = 'seg4_white_onehot.npy'
 
 
 def to_one_hot(seg, num_classes=NUM_CLASSES):
@@ -50,14 +54,21 @@ def _fg_dice(a_oh, b_oh, num_classes=NUM_CLASSES):
     return float(np.mean(dices))
 
 
+def _convert_one(job):
+    ss_path, out_path = job
+    np.save(out_path, remap_to_onehot(nib.load(ss_path).get_fdata().astype(np.int64)))
+
+
 def main():
     ap = argparse.ArgumentParser(description="SynthSeg .nii.gz → 5-class one-hot .npy")
     ap.add_argument('--lists', nargs='+', required=True,
-                    help='train/val txt files; each line = a subject seg4_onehot.npy path')
+                    help='train/val txt files; each line names a subject directory')
     ap.add_argument('--synthseg_dir', required=True,
                     help='root holding <subject>/<synthseg_name>')
     ap.add_argument('--synthseg_name', default='orig_synthseg.nii.gz')
-    ap.add_argument('--out_name', default='synthseg_onehot.npy')
+    ap.add_argument('--out_name', default='synthseg_white_onehot_v1.npy')
+    ap.add_argument('--workers', type=int, default=8,
+                    help='parallel subjects; the 84 MB one-hot write dominates')
     args = ap.parse_args()
 
     gt_paths = []
@@ -66,32 +77,38 @@ def main():
             gt_paths += [ln.strip() for ln in f if ln.strip()]
 
     print(f"{len(gt_paths)} subjects from {len(args.lists)} list(s)")
-    sanity_done = False
-    written, missing = 0, []
+    jobs, missing = [], []
+    for gt_path in gt_paths:
+        subject_dir = os.path.dirname(gt_path)
+        ss_path = os.path.join(args.synthseg_dir, os.path.basename(subject_dir),
+                               args.synthseg_name)
+        if os.path.exists(ss_path):
+            jobs.append((ss_path, os.path.join(subject_dir, args.out_name)))
+        else:
+            missing.append(os.path.basename(subject_dir))
 
-    for gt_path in tqdm(gt_paths, desc="Converting SynthSeg", ncols=80):
-        subject = os.path.basename(os.path.dirname(gt_path))   # OASIS_OAS1_0146_MR1
-        ss_path = os.path.join(args.synthseg_dir, subject, args.synthseg_name)
-        if not os.path.exists(ss_path):
-            missing.append(subject)
-            continue
-
-        data = nib.load(ss_path).get_fdata().astype(np.int64)
-        onehot = remap_to_onehot(data)
-        out_path = os.path.join(os.path.dirname(gt_path), args.out_name)
-        np.save(out_path, onehot)
-        written += 1
-
-        # One-subject sanity check: SynthSeg and GT must share the grid.
-        if not sanity_done and os.path.exists(gt_path):
+    # One-subject sanity check before the pool: SynthSeg and GT must share the grid.
+    if jobs:
+        onehot = remap_to_onehot(nib.load(jobs[0][0]).get_fdata().astype(np.int64))
+        gt_path = os.path.join(os.path.dirname(jobs[0][1]), GT_NAME)
+        subject = os.path.basename(os.path.dirname(jobs[0][1]))
+        if os.path.exists(gt_path):
             gt_oh = np.load(gt_path)
             if gt_oh.shape == onehot.shape:
-                print(f"\n[sanity] {subject}: SynthSeg/GT foreground Dice = "
+                print(f"[sanity] {subject}: SynthSeg/GT foreground Dice = "
                       f"{_fg_dice(onehot, gt_oh):.4f} (shapes match {onehot.shape})")
             else:
-                print(f"\n[sanity][WARN] {subject}: shape mismatch "
+                print(f"[sanity][WARN] {subject}: shape mismatch "
                       f"synthseg {onehot.shape} vs gt {gt_oh.shape} (not same grid)")
-            sanity_done = True
+        else:
+            print(f"[sanity][WARN] {subject}: no {GT_NAME} to compare against — "
+                  f"run convert_one_hot.py first")
+
+    with Pool(args.workers) as pool:
+        for _ in tqdm(pool.imap_unordered(_convert_one, jobs), total=len(jobs),
+                      desc="Converting SynthSeg", ncols=80):
+            pass
+    written = len(jobs)
 
     print(f"\nWrote {written} files. Missing SynthSeg for {len(missing)} subjects.")
     if missing:

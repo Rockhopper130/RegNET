@@ -17,7 +17,7 @@ data:
   val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
 
   # Template subject seg (used as moving image for every registration).
-  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
 
   # Template WM mesh, REPAIRED. FreeSurfer's own 0406 ?h.white self-intersects in
   # 660 faces / 0.1007% / 47 patches before any warp — about a fifth of the ~0.53%
@@ -36,8 +36,12 @@ data:
   #                        GT supervision) so the flow learns to denoise its input
   #                        rather than reproduce it. null reuses seg_filename,
   #                        i.e. the historical GT-in/GT-out setup.
-  seg_filename: "seg4_onehot.npy"
-  input_seg_filename: "synthseg_onehot_v1.npy"
+  # Both are the 5-class map whose class 3 is the WHITE-SURFACE INTERIOR (built
+  # by convert_one_hot.py / convert_synthseg_one_hot.py; see label_mapping.py for
+  # why that is not the WM tissue label). The old seg4_onehot.npy is a different
+  # grouping — do not mix the two in one run.
+  seg_filename: "seg4_white_onehot.npy"
+  input_seg_filename: "synthseg_white_onehot_v1.npy"
 
   # Surface + mesh supervision (off here; see config_meshsup.yaml). The pair
   # is written next to each subject's segs by utils/make_white_sdf.py: the
@@ -165,8 +169,8 @@ visualization:
   class_names:
     - "Background"
     - "Cortex"
-    - "Subcortical GM"
-    - "White Matter"
+    - "Other Brain"
+    - "White Surface Interior"
     - "CSF"
 
 # -----------------------------------------------------------------------------
