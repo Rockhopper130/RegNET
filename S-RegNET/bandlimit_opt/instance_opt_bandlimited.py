@@ -91,14 +91,16 @@ def integrate(vel, stn):
 
 
 @torch.no_grad()
-def net_init(model, template_seg, input_seg):
+def net_init(model, template_seg, input_seg, affine=None):
     """Frozen forward pass of the trained pieces, mirroring model.forward up to
     (but not including) the integration. The affine warp of the template for
-    the UNet input uses mode='nearest', exactly as model.forward does."""
-    affine = None
+    the UNet input uses mode='nearest', exactly as model.forward does. An
+    `affine` passed in replaces the affine net's prediction (the UNet then sees
+    the template aligned by it)."""
     template_in = template_seg
     if model.use_affine:
-        affine = model.affine_net(template_seg, input_seg)
+        if affine is None:
+            affine = model.affine_net(template_seg, input_seg)
         grid = F.affine_grid(affine, template_seg.size(), align_corners=False)
         template_in = F.grid_sample(template_seg, grid, mode='nearest',
                                     padding_mode='zeros', align_corners=False)

@@ -304,16 +304,17 @@ class SegRegistrationNet(nn.Module):
     rides on. The default 6-channel head predicts the two fields independently.
     """
     def __init__(self, target_size, seg_channels=5, use_affine=False,
-                 head='default'):
+                 head='default', lowpass_size=None):
         super().__init__()
         self.use_affine = use_affine
         self.head = head
         if use_affine:
             self.affine_net = AffineNet(in_channels=2 * seg_channels)
 
-        # band limit = 3/4 of the grid: 96 at 128³ (all existing checkpoints), 144 at 192³
+        # band limit = 3/4 of the grid unless set: 96 at 128³ (all existing
+        # checkpoints), 144 at 192³ (white_r192_ft kept 96, model.lowpass_size)
         self.unet = UNet(in_channels=2 * seg_channels, out_channels=6, head=head,
-                          lowpass_size=target_size[0] * 3 // 4)
+                          lowpass_size=lowpass_size or target_size[0] * 3 // 4)
         self.stn = SpatialTransformer(size=target_size)
 
     def forward(self, template_seg, sample_seg, return_velocity=False):

@@ -127,6 +127,95 @@ def sym_dist(mesh_w, gt_w, n_lh, gt_n_lh):
     return out
 
 
+def faces_of_vertex(faces, n_v):
+    """(n_v, max_degree) incident-face ids per vertex, short rows padded by
+    repeating the vertex's first face (a duplicate candidate costs nothing)."""
+    vi, fi = faces.ravel(), np.repeat(np.arange(len(faces)), 3)
+    order = np.argsort(vi, kind='stable')
+    vi, fi = vi[order], fi[order]
+    cnt = np.bincount(vi, minlength=n_v)
+    ptr = np.concatenate([[0], np.cumsum(cnt)])
+    out = np.repeat(fi[np.minimum(ptr[:-1], len(fi) - 1)][:, None], int(cnt.max()), 1)
+    rank = np.arange(len(vi)) - np.repeat(ptr[:-1], cnt)
+    out[vi, rank] = fi
+    return out
+
+
+def closest_on_triangles(p, tri):
+    """Distance from p[i] to triangle tri[i] (Ericson, Real-Time Collision
+    Detection 5.1.5): classify p against the six Voronoi regions of the
+    triangle's vertices and edges, else project into the face."""
+    a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
+    ab, ac, bc = b - a, c - a, c - b
+    d1, d2 = (ab * (p - a)).sum(1), (ac * (p - a)).sum(1)
+    d3, d4 = (ab * (p - b)).sum(1), (ac * (p - b)).sum(1)
+    d5, d6 = (ab * (p - c)).sum(1), (ac * (p - c)).sum(1)
+    va, vb, vc = d3 * d6 - d5 * d4, d5 * d2 - d1 * d6, d1 * d4 - d3 * d2
+    with np.errstate(divide='ignore', invalid='ignore'):
+        v, w = vb / (va + vb + vc), vc / (va + vb + vc)
+        inside = a + ab * v[:, None] + ac * w[:, None]
+        t1 = np.nan_to_num(np.clip(d1 / (d1 - d3), 0, 1))
+        t2 = np.nan_to_num(np.clip(d2 / (d2 - d6), 0, 1))
+        t3 = np.nan_to_num(np.clip((d4 - d3) / ((d4 - d3) + (d5 - d6)), 0, 1))
+    q = np.where(np.isfinite(inside).all(1)[:, None], inside, a)
+    for m, pt in ((((vc <= 0) & (d1 >= 0) & (d3 <= 0)), a + ab * t1[:, None]),
+                  (((vb <= 0) & (d2 >= 0) & (d6 <= 0)), a + ac * t2[:, None]),
+                  (((va <= 0) & (d4 >= d3) & (d5 >= d6)), b + bc * t3[:, None]),
+                  (((d1 <= 0) & (d2 <= 0)), a),
+                  (((d3 >= 0) & (d4 <= d3)), b),
+                  (((d6 >= 0) & (d5 <= d6)), c)):
+        q = np.where(m[:, None], pt, q)
+    return np.linalg.norm(p - q, axis=1)
+
+
+def point_to_surface(q, tv, tf, k=4, chunk=40_000):
+    """Exact point-to-triangle distance from each q to the surface (tv, tf),
+    searched over the incident faces of the k nearest target vertices. Every
+    triangle within reach of a query point has a vertex among its nearest few
+    at this vertex density, so the 1-ring union is the whole candidate set."""
+    cand = faces_of_vertex(tf, len(tv))[cKDTree(tv).query(q, k=k)[1]]
+    cand = cand.reshape(len(q), -1)
+    d = np.empty(len(q))
+    for s in range(0, len(q), chunk):
+        c = cand[s:s + chunk]
+        d[s:s + chunk] = closest_on_triangles(np.repeat(q[s:s + chunk], c.shape[1], 0),
+                                              tv[tf[c.ravel()]]).reshape(c.shape).min(1)
+    return d
+
+
+def hemi_faces(faces, lo, hi):
+    """The faces of one hemisphere block [lo, hi), re-indexed to that block —
+    no face spans the two hemispheres."""
+    keep = (faces[:, 0] >= lo) & (faces[:, 0] < hi)
+    return faces[keep] - lo
+
+
+def p2s_dist(mesh_w, mesh_f, gt_w, gt_f, n_lh, gt_n_lh):
+    """sym_dist with point-to-TRIANGLE distances: a vertex that lands on a face
+    between the other surface's vertices scores its true gap to the surface, not
+    the gap to the nearest vertex (v2v overstates the mean by ~0.15 mm at this
+    vertex spacing, the HD95 by ~0.02). Same [(m2g_lh, g2m_lh), (m2g_rh, g2m_rh)]
+    layout, lh vs lh and rh vs rh."""
+    out = []
+    for (m_lo, m_hi), (g_lo, g_hi) in (((0, n_lh), (0, gt_n_lh)),
+                                       ((n_lh, len(mesh_w)), (gt_n_lh, len(gt_w)))):
+        out.append((point_to_surface(mesh_w[m_lo:m_hi], gt_w[g_lo:g_hi],
+                                     hemi_faces(gt_f, g_lo, g_hi)),
+                    point_to_surface(gt_w[g_lo:g_hi], mesh_w[m_lo:m_hi],
+                                     hemi_faces(mesh_f, m_lo, m_hi))))
+    return out
+
+
+def cortex_only(per_hemi, cortex, n_lh):
+    """Drop the medial wall from per-hemisphere directed distances: keep only
+    cortex-labelled QUERY vertices in each direction (both meshes share the
+    mask's indexing), the same selection push_optimized_mesh.sym_dist_cortex
+    makes — but as a mask on distances already computed against the whole
+    target surface, so it costs nothing."""
+    return [(m2g[cortex[h]], g2m[cortex[h]])
+            for h, (m2g, g2m) in zip((slice(0, n_lh), slice(n_lh, None)), per_hemi)]
+
+
 def hemi_scores(per_hemi, prefix='', percentile=95):
     """lh and rh scored separately, then pooled for the combined score.
     percentile controls the tail metric: 95 -> HD95, 99 -> HD99, etc."""

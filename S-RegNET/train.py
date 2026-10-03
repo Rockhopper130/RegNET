@@ -123,6 +123,7 @@ class Config:
         # 'default' = the 6-channel (fw, rv) flow head; 'bandlimited' = the
         # tied two-branch band-limited head (model.BandLimitedHead).
         self.head = cfg['model'].get('head', 'default')
+        self.lowpass_size = cfg['model'].get('lowpass_size')
 
         # Affine
         affine_cfg = cfg.get('affine', {})
@@ -821,7 +822,7 @@ def main():
     model = SegRegistrationNet(
         target_size=config.target_size,
         seg_channels=config.seg_channels, use_affine=config.use_affine,
-        head=config.head,
+        head=config.head, lowpass_size=config.lowpass_size,
     ).to(device)
     stn = SpatialTransformer(size=config.target_size, device=device).to(device)
 

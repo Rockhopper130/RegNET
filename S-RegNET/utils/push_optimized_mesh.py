@@ -11,10 +11,20 @@ flow is exp(+vel_fw) via the model's own scaling-and-squaring loop, the exact
 inverse is exp(-vel_fw), and the default push undoes the affine first, then
 applies the inverse flow.
 
+Distances come in two flavours per row: sym_* / symcx_* are vertex-to-vertex
+(evaluate_all.sym_dist), p2s_* / p2s_cx_* are vertex-to-triangle
+(evaluate_all.p2s_dist); *cx* drops the medial wall from the query side.
+--repair runs utils/repair_template_mesh.repair (vertices only, faces untouched)
+on the pushed mesh before scoring: si_faces_pct_pre keeps the pre-repair
+self-intersection, every other column and the saved surf describe the repaired
+mesh. t_*_s columns split the wall time per stage (push, self-int counts,
+distances, repair).
+
 Numbers and files only. Outputs into --output_dir:
     mesh_metrics.csv                  one row per subject x arm
     summary.json                      per-arm stats + full args
     <subj>_<arm>_deformed.white.surf  open in freeview against the subject volume
+    <subj>_<arm>_deformed_prerepair.white.surf   with --repair --keep_prerepair
     <subj>_<arm>_mesh.png             3 ortho slices + distance histogram
     GIT_SHA.txt                       provenance
 
@@ -23,13 +33,14 @@ Run from the S-RegNET directory (needs torch + nibabel + scipy; GPU cluster):
         --probe_dir <instance_opt_bandlimited output_dir> \\
         --config config.yaml \\
         --output_dir <that output_dir>/mesh_eval \\
-        --device cuda:0
+        --device cuda:0 [--arms baseline,symM50] [--repair]
 """
 
 import argparse
 import csv
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -49,20 +60,24 @@ from visualize_run import centroid_slices
 from visualize_mesh import (WM_LABEL, integrate_svf, load_template_mesh,
                             load_subject_white, mm_per_norm, norm_to_world,
                             push_from_flows, ref_for, render_sample,
-                            save_deformed_surf, triangle_flip_fraction)
-from evaluate_all import sym_dist, hemi_scores, summarize
+                            save_deformed_surf, triangle_flip_fraction, world_to_norm)
+from evaluate_all import sym_dist, p2s_dist, cortex_only, hemi_scores, summarize
 from mesh_flip_probe import self_intersections
+from repair_template_mesh import repair
 
-ARMS = ('baseline', 'control', 'treatment')
-METRIC_KEYS = ('flip_pct', 'inverse_residual_mm',
-               'si_faces', 'si_faces_pct', 'si_pairs', 'si_clusters', 'si_largest',
+SI_KEYS = ('si_faces', 'si_faces_pct', 'si_pairs', 'si_clusters', 'si_largest')
+METRIC_KEYS = ('flip_pct', 'inverse_residual_mm', *SI_KEYS,
                'sym_mean_mm', 'sym_hd95_mm', 'sym_max_mm',
                'sym_mean_lh_mm', 'sym_hd95_lh_mm', 'sym_max_lh_mm',
                'sym_mean_rh_mm', 'sym_hd95_rh_mm', 'sym_max_rh_mm',
                'symcx_mean_mm', 'symcx_hd95_mm', 'symcx_max_mm',
                'symcx_mean_lh_mm', 'symcx_hd95_lh_mm', 'symcx_max_lh_mm',
                'symcx_mean_rh_mm', 'symcx_hd95_rh_mm', 'symcx_max_rh_mm',
-               'undeformed_mean_mm')
+               'p2s_mean_mm', 'p2s_hd95_mm', 'p2s_max_mm',
+               'p2s_cx_mean_mm', 'p2s_cx_hd95_mm', 'p2s_cx_max_mm',
+               'undeformed_mean_mm',
+               'si_faces_pct_pre', 'repair_rounds', 'repair_max_move_mm', 'repair_seconds',
+               't_push_s', 't_si_s', 't_dist_s', 't_repair_s')
 
 # fsaverage-164k medial-wall masks (neuromaps copies of the fsaverage cortex
 # definition; per-vertex 1 = cortex, 0 = medial wall).
@@ -113,14 +128,16 @@ def load_onehot(path, target_size):
 @torch.no_grad()
 def eval_pair(npz_path, verts_t, verts_np, faces, n_lh, gt, stn, dev, ref, args,
               cortex=None):
-    """Integrate the stored velocities, push the template mesh, score it.
-    Returns (metric row, pushed verts in normalized coords, dist for the figure)."""
+    """Integrate the stored velocities, push the template mesh, repair it when
+    asked, score it. Returns (metric row, scored verts in normalized coords,
+    dist for the figure, pre-repair verts or None)."""
     z = np.load(npz_path)
     vel_fw = torch.from_numpy(z['vel_fw']).float().unsqueeze(0).to(dev)
     vel_rv = torch.from_numpy(z['vel_rv']).float().unsqueeze(0).to(dev)
     affine = torch.from_numpy(z['affine_matrix']).float().unsqueeze(0).to(dev) \
         if 'affine_matrix' in z else None
 
+    t0 = time.perf_counter()                    # after the npz read: compute only
     flow_fw = integrate_svf(vel_fw, stn)
     flow_rv = integrate_svf(vel_rv, stn)
     flow_inv = integrate_svf(-vel_fw, stn)      # exact SVF inverse: exp(-v)
@@ -131,28 +148,57 @@ def eval_pair(npz_path, verts_t, verts_np, faces, n_lh, gt, stn, dev, ref, args,
                         args.inv_iter, args.inv_alpha, flow_inv=flow_inv, parity=0.0)
     v = p['pushes'][args.push]
     w = norm_to_world(v, ref)
+    row = {'inverse_residual_mm': float((p['inv_residual_norm'] * mm_per_norm(ref)).mean()),
+           't_push_s': time.perf_counter() - t0}
 
-    row = {'flip_pct': triangle_flip_fraction(verts_np, v, faces),
-           'inverse_residual_mm': float((p['inv_residual_norm'] * mm_per_norm(ref)).mean())}
+    si, t_si, t_rep, v_pre = None, 0.0, 0.0, None
     if not args.no_self_int:
+        t = time.perf_counter()
         si, _ = self_intersections(w, faces, npz_path.stem)
-        row.update({k: si[k] for k in ('si_faces', 'si_faces_pct', 'si_pairs',
-                                       'si_clusters', 'si_largest')})
+        t_si += time.perf_counter() - t
+    if args.repair:
+        t = time.perf_counter()
+        w_rep, hist = repair(w, faces)
+        t_rep = time.perf_counter() - t
+        row.update({'si_faces_pct_pre': si['si_faces_pct'] if si else float('nan'),
+                    'repair_rounds': sum(h['si_pairs'] > 0 for h in hist),
+                    'repair_max_move_mm': float(np.linalg.norm(w_rep - w, axis=1).max()),
+                    'repair_seconds': t_rep})
+        v_pre, w = v, w_rep
+        v = world_to_norm(w, ref)
+        if not args.no_self_int:            # the deliverable is the repaired mesh
+            t = time.perf_counter()
+            si, _ = self_intersections(w, faces, f'{npz_path.stem} repaired')
+            t_si += time.perf_counter() - t
+    if si is not None:
+        row.update({k: si[k] for k in SI_KEYS})
+    row['flip_pct'] = triangle_flip_fraction(verts_np, v, faces)
 
-    dist = None
-    gt_v, _gt_f, gt_n_lh = gt
+    dist, t_v2v, t_p2s = None, 0.0, 0.0
+    gt_v, gt_f, gt_n_lh = gt
     if gt_v is not None:
         gt_w = norm_to_world(gt_v, ref)
+        shared_index = cortex is not None and gt_n_lh == n_lh and len(gt_w) == len(cortex)
+        t = time.perf_counter()
         per_hemi = sym_dist(w, gt_w, n_lh, gt_n_lh)
         row.update(hemi_scores(per_hemi, 'sym_'))
-        if cortex is not None and gt_n_lh == n_lh and len(gt_w) == len(cortex):
-            row.update(hemi_scores(sym_dist_cortex(w, gt_w, n_lh, cortex),
-                                   'symcx_'))
+        if shared_index:
+            row.update(hemi_scores(sym_dist_cortex(w, gt_w, n_lh, cortex), 'symcx_'))
         und = sym_dist(norm_to_world(verts_np, ref), gt_w, n_lh, gt_n_lh)
         row['undeformed_mean_mm'] = hemi_scores(und, 'undeformed_')['undeformed_mean_mm']
+        t_v2v = time.perf_counter() - t
+        t = time.perf_counter()
+        p2s = p2s_dist(w, faces, gt_w, gt_f, n_lh, gt_n_lh)
+        row.update(hemi_scores(p2s, 'p2s_'))
+        if shared_index:
+            row.update(hemi_scores(cortex_only(p2s, cortex, n_lh), 'p2s_cx_'))
+        t_p2s = time.perf_counter() - t
         dist = {'both': np.concatenate([d for h in per_hemi for d in h]),
                 'init_mean': row['undeformed_mean_mm']}
-    return row, v, dist
+    row.update({'t_si_s': t_si, 't_dist_s': t_v2v + t_p2s, 't_repair_s': t_rep})
+    print(f"      [time] push {row['t_push_s']:.1f} s | self-int {t_si:.1f} s | "
+          f"v2v {t_v2v:.1f} s | p2s {t_p2s:.1f} s | repair {t_rep:.1f} s", flush=True)
+    return row, v, dist, v_pre
 
 
 def main():
@@ -166,8 +212,9 @@ def main():
                     help='config.yaml (a bare name resolves against the S-RegNET dir)')
     ap.add_argument('--output_dir', required=True)
     ap.add_argument('--device', default='cuda:0')
-    ap.add_argument('--arms', default=','.join(ARMS),
-                    help='comma list of arms to process')
+    ap.add_argument('--arms', default=None,
+                    help='comma list of arms to process, as named in flows/<subject>_<arm>.npz '
+                         '(default: every arm found there)')
     ap.add_argument('--subjects', default=None,
                     help='comma list of subject dir names (default: all in flows/)')
     ap.add_argument('--push', choices=['svf_inv', 'numeric', 'rv', 'rv_noaffine'],
@@ -180,6 +227,12 @@ def main():
                     help='dir with the fsaverage-164k aparc label GIFTIs for the '
                          'cortex-only (medial-wall-masked) symmetric distance; '
                          'omitted -> symcx_* NaN')
+    ap.add_argument('--repair', action='store_true',
+                    help='relax the self-intersecting patches of the pushed mesh '
+                         '(repair_template_mesh.repair, vertices only) before scoring; '
+                         'si_faces_pct_pre keeps the pre-repair count')
+    ap.add_argument('--keep_prerepair', action='store_true',
+                    help='with --repair, also save <subj>_<arm>_deformed_prerepair.white.surf')
     ap.add_argument('--no_self_int', action='store_true')
     ap.add_argument('--no_save_mesh', action='store_true')
     ap.add_argument('--dpi', type=int, default=140)
@@ -213,8 +266,8 @@ def main():
         subj, _, arm = f.stem.rpartition('_')
         if subj and arm:
             avail.setdefault(subj, set()).add(arm)
-    arms = [a for a in args.arms.split(',') if a]
     known = set().union(*avail.values()) if avail else set()
+    arms = [a for a in args.arms.split(',') if a] if args.arms else sorted(known)
     unknown = [a for a in arms if a not in known]
     if unknown:
         raise SystemExit(f'[push] unknown arms {unknown} '
@@ -285,8 +338,8 @@ def main():
 
             for arm in (a for a in arms if a in avail[subj]):
                 npz_path = flows_dir / f'{subj}_{arm}.npz'
-                met, v, dist = eval_pair(npz_path, verts_t, verts_np, faces, n_lh,
-                                         gt, stn, dev, ref, args, cortex)
+                met, v, dist, v_pre = eval_pair(npz_path, verts_t, verts_np, faces, n_lh,
+                                                gt, stn, dev, ref, args, cortex)
 
                 curves = [((verts_np, faces), 'gold', 1.2)]
                 if gt[0] is not None:
@@ -299,6 +352,9 @@ def main():
                 if not args.no_save_mesh:
                     save_deformed_surf(v, faces, ref,
                                        out / f'{subj}_{arm}_deformed.white.surf')
+                    if v_pre is not None and args.keep_prerepair:
+                        save_deformed_surf(v_pre, faces, ref,
+                                           out / f'{subj}_{arm}_deformed_prerepair.white.surf')
 
                 row = {'subject': subj, 'arm': arm,
                        **{k: met.get(k, float('nan')) for k in METRIC_KEYS}}
@@ -314,8 +370,14 @@ def main():
                             f"{row['undeformed_mean_mm']:5.2f}")
                 if not np.isnan(row['symcx_mean_mm']):
                     msg += f" | symcx {row['symcx_mean_mm']:5.2f} mm"
+                if not np.isnan(row['p2s_mean_mm']):
+                    msg += f" | p2s {row['p2s_mean_mm']:5.2f} mm / hd95 {row['p2s_hd95_mm']:5.2f}"
                 if not args.no_self_int:
                     msg += f" | self-int {row['si_faces_pct']:.4f}%"
+                if args.repair:
+                    msg += (f" (pre {row['si_faces_pct_pre']:.4f}%) | repair "
+                            f"{row['repair_rounds']} rounds, max move "
+                            f"{row['repair_max_move_mm']:.2f} mm")
                 print(msg, flush=True)
             if 'cuda' in args.device:
                 torch.cuda.empty_cache()

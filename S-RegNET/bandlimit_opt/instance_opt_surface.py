@@ -57,6 +57,18 @@ One optimization per arm runs to max(--snapshots) and stores flows + metrics at
 each snapshot, so `<arm><iters>` (symM50, symM100, ...) are two reads of one
 trajectory rather than two runs.
 
+Two optional knobs, each defaulting to the behaviour above:
+  --medial       `harmonic`: a term on the MEDIAL-WALL template vertices (the
+                 ones the surface terms exclude) of the pushed mesh, in the
+                 surface arms: mean |L u| mm (uniform Laplacian) of the
+                 displacement u = pushed - aligned template, so the wall follows
+                 its cortical rim. Calibrated like the mesh terms.
+  --affine_init  `auto` fits a closed-form similarity of the template class-3
+                 mask to the input class-3 mask (centroids + one isotropic
+                 scale from the second moments, no rotation) and keeps whichever
+                 of it and the net's affine gives the higher Dice3; the UNet,
+                 refinement, saved flows and push all use the pick.
+
 Numbers only. Outputs into --output_dir:
     metrics.json                   per-subject x arm x snapshot, arm means,
                                    calibration, weights, wall times
@@ -85,6 +97,7 @@ from pathlib import Path
 import numpy as np
 import nibabel as nib
 import torch
+import torch.nn.functional as F
 from scipy.ndimage import distance_transform_edt, gaussian_filter, map_coordinates
 from skimage.measure import marching_cubes
 
@@ -94,8 +107,8 @@ sys.path.insert(0, str(_ROOT / 'utils'))
 
 from git_provenance import write_git_sha
 from inference import load_config, setup_inference
-from losses import (MESH_TERMS, SegRegistrationLoss, mesh_geometry,
-                    mesh_regularizers, mesh_structure, sample_sdf)
+from losses import (MESH_TERMS, SegRegistrationLoss, compute_dice_score,
+                    mesh_geometry, mesh_regularizers, mesh_structure, sample_sdf)
 from visualize_run import resolve_checkpoint, detect_affine
 from visualize_mesh import (load_template_mesh, mm_per_norm, ref_for,
                             sample_field, undo_affine)
@@ -200,12 +213,32 @@ def reverse_distance(flow_fw, s, pts, frac=TAIL_FRAC):
     return surface_terms(s['sdf_tpl'], _apply_affine_pts(q, s['affine']), frac)
 
 
-def arm_terms(spec):
-    """The loss keys an arm sums and logs."""
+def laplacian_mm(u, m):
+    """|L u|_i in mm: the uniform mesh Laplacian losses.mesh_geometry applies to
+    the vertex positions, applied to a per-vertex field u (N, 3) instead, on
+    the same precomputed edges and degrees."""
+    e0, e1 = m['edges'][:, 0], m['edges'][:, 1]
+    nb = torch.zeros_like(u).index_add_(0, e0, u[e1]).index_add_(0, e1, u[e0])
+    return (nb / m['deg'][:, None] - u).norm(dim=1) * m['mm']
+
+
+def medial_term(pushed, s):
+    """--medial harmonic: mean |L u| mm over the MEDIAL-WALL template vertices
+    (the ones the surface terms exclude) of the pushed mesh's displacement
+    u = pushed - verts_all (the displacement varies smoothly across the wall,
+    so the wall follows its cortical rim)."""
+    u = pushed - s['verts_all']
+    return laplacian_mm(u, s['mesh_ops'])[~s['cortex_t']].mean()
+
+
+def arm_terms(spec, medial=False):
+    """The loss keys an arm sums and logs; `medial` adds the --medial wall term
+    to the surface arms."""
     if not spec:
         return DICE_TERMS
     return (DSDF_TERMS + (REV_TERMS if spec.get('rev') else ())
-            + (MESH_TERMS if spec.get('mesh') else ()))
+            + (MESH_TERMS if spec.get('mesh') else ())
+            + (('medial',) if medial else ()))
 
 
 def dicesdf_objective(vel_fw, vel_rv, s, w, keys):
@@ -240,6 +273,8 @@ def dicesdf_objective(vel_fw, vel_rv, s, w, keys):
             flow_fw, s, s['pts_rev'], s['tail_frac'])
     if 'mesh_edge' in keys:
         terms.update(mesh_regularizers(pushed, s['verts_all'], s['mesh_ops']))
+    if 'medial' in keys:
+        terms['medial'] = medial_term(pushed, s)
     return sum(w[k] * terms[k] for k in keys), terms
 
 
@@ -292,7 +327,7 @@ def optimize(base, s, args, name, out, affine, snaps):
     """Adam on a zero-initialized tied coarse delta; the delta is the only leaf
     with gradients. Snapshots the trajectory at each of `snaps` iterations."""
     spec = ARMS[base]
-    keys = arm_terms(spec)
+    keys = arm_terms(spec, args.medial != 'none')
     d = args.coarse_levels
     delta = torch.zeros(1, 3 if s['tied'] else 6, d, d, d, device=s['dev'],
                         requires_grad=True)
@@ -328,6 +363,62 @@ def optimize(base, s, args, name, out, affine, snaps):
 
 
 # =============================================================================
+# Analytic affine (--affine_init auto)
+# =============================================================================
+
+def mask_moments(mask):
+    """Centroid and covariance of a boolean (D, H, W) mask's voxel centres in
+    F.affine_grid's normalized (x, y, z) coordinates (align_corners=False)."""
+    idx = mask.nonzero().float()                            # (N, 3) as (i, j, k)
+    size = torch.tensor(mask.shape, dtype=torch.float32, device=mask.device)
+    p = ((2.0 * idx + 1.0) / size - 1.0).flip(1)            # (k, j, i) -> (x, y, z)
+    return p.mean(0), torch.cov(p.T)
+
+
+def similarity_affine(tpl_mask, in_mask):
+    """(1, 3, 4) affine in the model's convention. F.affine_grid's theta is a
+    PULL — aligned(x) = template(A·[x;1]) — so A carries an INPUT-space
+    coordinate to template space (train._apply_affine_pts, undo_affine). The
+    masks' centroids and overall size are matched without rotation: the
+    template->input map is M = s I with s = (det C_in / det C_tpl)^(1/6) (a 3-D
+    covariance determinant scales as s^6), t = c_in - M c_tpl, and A is its
+    inverse."""
+    c_t, C_t = mask_moments(tpl_mask)
+    c_i, C_i = mask_moments(in_mask)
+    M = (torch.det(C_i) / torch.det(C_t)) ** (1 / 6) * torch.eye(3, device=c_t.device)
+    A = torch.linalg.inv(M)
+    return torch.cat([A, (c_t - A @ c_i)[:, None]], dim=1)[None]
+
+
+@torch.no_grad()
+def affine_dice(template_seg, input_seg, affine):
+    """Hard class-WM Dice of the affine-aligned template against the input:
+    model.forward's nearest pull, before any dense flow."""
+    grid = F.affine_grid(affine, template_seg.size(), align_corners=False)
+    aligned = F.grid_sample(template_seg, grid, mode='nearest',
+                            padding_mode='zeros', align_corners=False)
+    return compute_dice_score(aligned, input_seg, template_seg.shape[1])[0][WM]
+
+
+@torch.no_grad()
+def auto_affine(name, template_seg, input_seg, affine_net, mm):
+    """--affine_init auto: fit the similarity and keep whichever of it and the
+    net's affine has the higher class-WM Dice of the aligned template against
+    the input (printed with the identity's for scale)."""
+    affine = similarity_affine(template_seg[0, WM] > 0.5, input_seg[0, WM] > 0.5)
+    eye = torch.eye(3, 4, device=input_seg.device)[None]
+    desc = lambda a: (f"det {float(torch.det(a[0, :, :3])):.4f} t_mm ("
+                      + ' '.join(f'{x * mm:+.2f}' for x in a[0, :, 3].tolist()) + ')')
+    dice = lambda a: float(affine_dice(template_seg, input_seg, a))
+    d_net, d_fit = dice(affine_net), dice(affine)
+    keep_net = d_net >= d_fit
+    print(f'[surf] {name} affine: identity Dice3 {dice(eye):.4f} | net {desc(affine_net)} '
+          f'Dice3 {d_net:.4f} | similarity {desc(affine)} Dice3 {d_fit:.4f} | auto picks '
+          f"{'net' if keep_net else 'similarity'}", flush=True)
+    return affine_net if keep_net else affine
+
+
+# =============================================================================
 # Per subject
 # =============================================================================
 
@@ -337,8 +428,14 @@ def probe_subject(name, sdir, ctx, mesh, loss_fn, args, out):
     input_seg = load_onehot(sdir / d['input_seg_filename'], ts).to(dev)
     gt_seg = load_onehot(sdir / d['seg_filename'], ts).to(dev)
 
-    vel_fw0, vel_rv0, lambda_map, affine = net_init(ctx['model'],
-                                                    ctx['template_seg'], input_seg)
+    affine = None
+    if args.affine_init == 'auto':
+        with torch.no_grad():
+            affine_net = ctx['model'].affine_net(ctx['template_seg'], input_seg)
+        affine = auto_affine(name, ctx['template_seg'], input_seg, affine_net,
+                             mesh['ops']['mm'])
+    vel_fw0, vel_rv0, lambda_map, affine = net_init(ctx['model'], ctx['template_seg'],
+                                                    input_seg, affine)
     opt_fw0, opt_rv0 = vel_fw0, vel_rv0
     if args.lowpass_init:
         opt_fw0 = lowpass(vel_fw0, args.lowpass_init, ts)
@@ -371,7 +468,7 @@ def probe_subject(name, sdir, ctx, mesh, loss_fn, args, out):
          'pts_rev': torch.tensor(subsample(pts_cx, args.n_rev_pts or None), device=dev),
          'verts_all': verts_all,
          'cortex': mesh['cortex'], 'cortex_t': mesh['cortex_t'],
-         'mesh_ops': mesh['ops']}
+         'mesh_ops': mesh['ops'], 'medial': args.medial}
 
     # Calibration: the dice arm's data term at iteration 0 sets the surface
     # weights (forward and reverse), so every objective starts with a data term
@@ -396,13 +493,18 @@ def probe_subject(name, sdir, ctx, mesh, loss_fn, args, out):
         for k, v in mesh_regularizers(pushed, verts_all, mesh['ops']).items():
             calib[f'{k}_0'] = float(v)
             calib[f'w_{k}'] = MESH_FRAC * data0 / max(float(v), MESH_EPS)
+        if args.medial != 'none':
+            calib['medial_0'] = float(medial_term(pushed, s))
+            calib['w_medial'] = MESH_FRAC * data0 / max(calib['medial_0'], MESH_EPS)
     print(f"[surf] {name} calibration: dice data term @0 = {data0:.4f} | "
           + ' | '.join(f"{t}: mean {calib[f'{t}_mean_0_mm']:.3f} mm, tail "
                        f"{calib[f'{t}_tail_0_mm']:.3f} mm -> w_surface "
                        f"{calib[f'w_surface_{t}']:.4f}" for t in ('in', 'gt', 'rev'))
           + f" | template lap {calib['tpl_lap_mm']:.4f} mm | "
           + ' | '.join(f"{k}@0 {calib[f'{k}_0']:.5f} -> w {calib[f'w_{k}']:.4g}"
-                       for k in MESH_TERMS), flush=True)
+                       for k in MESH_TERMS)
+          + (f" | medial({args.medial})@0 {calib['medial_0']:.5f} mm -> w "
+             f"{calib['w_medial']:.4g}" if 'w_medial' in calib else ''), flush=True)
 
     rows = {'baseline': snapshot(name, 'baseline', vel_fw0, vel_rv0, s, out,
                                  affine, 0.0)}
@@ -416,7 +518,8 @@ def probe_subject(name, sdir, ctx, mesh, loss_fn, args, out):
                       'bending': w['bending'], 'jacobian': w['jacobian'],
                       'dice': args.dice_mult * w['dice'],
                       'cross_entropy': args.dice_mult * w['cross_entropy'],
-                      **{k: args.mesh_w * calib[f'w_{k}'] for k in MESH_TERMS}}
+                      **{k: args.mesh_w * calib[f'w_{k}'] for k in MESH_TERMS},
+                      **({'medial': calib['w_medial']} if 'w_medial' in calib else {})}
         print(f"[surf] {name} {base}: tail_frac {s['tail_frac']} | rev pts "
               f"{len(s['pts_rev']):,} | weights " +
               ' '.join(f'{k}={v:.4g}' for k, v in s['w_sdf'].items()), flush=True)
@@ -472,6 +575,15 @@ def main():
                          'interface point)')
     ap.add_argument('--mesh_w', type=float, default=1.0,
                     help='multiplier on the calibrated mesh-regulariser weights (symM)')
+    ap.add_argument('--medial', choices=('none', 'harmonic'), default='none',
+                    help='term on the medial-wall template vertices of the pushed '
+                         'mesh (surface arms): mean |Laplacian of the displacement| '
+                         'mm, calibrated like the mesh terms')
+    ap.add_argument('--affine_init', choices=('net', 'auto'), default='net',
+                    help="affine the refinement starts from: the net's own, or "
+                         'auto = whichever of it and a closed-form similarity fit of '
+                         'the template class-3 mask to the input class-3 mask has the '
+                         'higher class-3 Dice')
     args = ap.parse_args()
 
     t_start = time.time()
@@ -502,10 +614,13 @@ def main():
     print(f'[surf] checkpoint = {ckpt}\n[surf] config = {cfg_path}\n'
           f'[surf] arms = {args.arms} | delta {args.coarse_levels}^3 | '
           f'lowpass_init = {args.lowpass_init} | lr = {args.lr} | '
-          f'tail_ratio = {args.tail_ratio} | out = {out}', flush=True)
+          f'tail_ratio = {args.tail_ratio} | medial = {args.medial} | '
+          f'affine_init = {args.affine_init} | out = {out}', flush=True)
 
     ctx = setup_inference(ckpt, str(cfg_path), args.device,
                           use_affine=detect_affine(ckpt), verbose=True)
+    if args.affine_init == 'auto' and not ctx['use_affine']:
+        raise SystemExit('[surf] --affine_init auto needs an affine-enabled checkpoint')
 
     # Same loss object (and therefore the same weights) as the deployed tool;
     # lambda_prior is zeroed because the lambda map is frozen here.
