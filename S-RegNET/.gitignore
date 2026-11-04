@@ -3,3 +3,6 @@ instance_opt_probe_*/
 bandlimit_opt/results_*/
 bandlimit_opt/smoke_test/
 bandlimit_opt/*.log
+*.zip
+*.npz
+*.npy

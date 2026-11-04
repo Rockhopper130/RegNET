@@ -19,14 +19,14 @@ data:
   # Training and validation data lists (text files; one path per line, each
   # pointing at the seg .npy of one subject — the dataset loader infers the
   # subject directory from the file path).
-  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
-  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+  train_txt: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_mahith_reddy/oasis_data/val.txt"
 
   # Template subject seg (used as moving image for every registration).
-  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
 
   # Template WM mesh, REPAIRED (see config.yaml for the provenance note).
-  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
 
   seg_filename: "seg4_white_onehot.npy"
   input_seg_filename: "synthseg_white_onehot_v1.npy"
@@ -44,7 +44,7 @@ data:
 output:
   # Own run tree: the distilled net is a different architecture from the runs
   # under synthseg_input/ and must not be mistaken for one of them.
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/distill_v1"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/distill_v1"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -183,4 +183,4 @@ resume:
   # affine net load normally, out_conv.weight[:3]/bias[:3] become the base
   # branch, the residual branch stays zero, and the optimizer state and epoch
   # counter of that run are discarded.
-  checkpoint_path: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/mahith_experiment/20260801_083414/checkpoints/best_model.pth"
+  checkpoint_path: "/shared/scratch/0/home/v_mahith_reddy/training_results/mahith_experiment/20260801_083414/checkpoints/best_model.pth"

@@ -13,11 +13,11 @@
 # Data Paths
 # -----------------------------------------------------------------------------
 data:
-  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
-  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+  train_txt: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_mahith_reddy/oasis_data/val.txt"
 
-  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
-  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
+  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
 
   seg_filename: "seg4_white_onehot.npy"
   input_seg_filename: "synthseg_white_onehot_v1.npy"
@@ -28,14 +28,14 @@ data:
   # they are independent of the class-3 redefinition and need no regeneration.
   white_sdf_filename: "white_sdf_v1.npy"
   white_surf_filename: "white_surf_v1.npz"
-  template_white_sdf_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_white_sdf_v1.npy"
-  cortex_labels_dir: "/shared/scratch/0/home/v_nishchay_nilabh/bandlimit_opt/fsaverage_labels"
+  template_white_sdf_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_white_sdf_v1.npy"
+  cortex_labels_dir: "/shared/scratch/0/home/v_mahith_reddy/bandlimit_opt/fsaverage_labels"
 
 # -----------------------------------------------------------------------------
 # Output Configuration
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/white_r192_ft"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/white_r192_ft"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -129,5 +129,5 @@ visualization:
 # Resume Training
 # -----------------------------------------------------------------------------
 resume:
-  checkpoint_path: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/res192_v1/20260910_130340/checkpoints/best_model.pth"
+  checkpoint_path: "/shared/scratch/0/home/v_mahith_reddy/training_results/res192_v1/20260910_130340/checkpoints/best_model.pth"
   weights_only: true

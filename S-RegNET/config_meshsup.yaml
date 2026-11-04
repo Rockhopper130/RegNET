@@ -20,17 +20,17 @@ data:
   # Training and validation data lists (text files; one path per line, each
   # pointing at the seg .npy of one subject — the dataset loader infers the
   # subject directory from the file path).
-  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
-  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+  train_txt: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_mahith_reddy/oasis_data/val.txt"
 
   # Template subject seg (used as moving image for every registration).
-  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
 
   # Template WM mesh, REPAIRED (see config.yaml for the provenance note). Now
   # read by train.py too, not just the eval tools: its `verts_norm` are the
   # points the template->subject surface term pushes and scores. MESHSUP: its
   # `faces` build the edge / Laplacian / face-pair structure of the mesh terms.
-  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
 
   seg_filename: "seg4_white_onehot.npy"
   input_seg_filename: "synthseg_white_onehot_v1.npy"
@@ -52,19 +52,19 @@ data:
 
   # SURFACE: the same volume for the template, for the subject->template
   # direction of the symmetric term.
-  template_white_sdf_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_white_sdf_v1.npy"
+  template_white_sdf_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_white_sdf_v1.npy"
 
   # SURFACE: fsaverage nomedialwall labels (ico7, lh+rh). The medial wall is an
   # artificial cut, not anatomy, and must not be scored — it is 27,803 of the
   # 327,684 vertices (8.5%). null would score every vertex.
-  cortex_labels_dir: "/shared/scratch/0/home/v_nishchay_nilabh/bandlimit_opt/fsaverage_labels"
+  cortex_labels_dir: "/shared/scratch/0/home/v_mahith_reddy/bandlimit_opt/fsaverage_labels"
 
 # -----------------------------------------------------------------------------
 # Output Configuration
 # -----------------------------------------------------------------------------
 output:
   # MESHSUP: own run tree (_v2; _v1 is the earlier run from the mesh-sup branch).
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/meshsup_v2"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/meshsup_v2"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -228,7 +228,7 @@ resume:
   # 0.787, pushed-mesh t2s 0.814 mm) — the checkpoint the refinement was
   # calibrated and evaluated on. Same architecture and grid, so the weights
   # load one-to-one.
-  checkpoint_path: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/res192_v1/20260910_130340/checkpoints/best_model.pth"
+  checkpoint_path: "/shared/scratch/0/home/v_mahith_reddy/training_results/res192_v1/20260910_130340/checkpoints/best_model.pth"
   # MESHSUP: weights only — fresh optimizer, epoch counter back to 1, best
   # Dice / surface reset. Five new loss terms make the old Adam moments and
   # the old best-Dice bar meaningless.

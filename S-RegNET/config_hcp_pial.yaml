@@ -1,0 +1,135 @@
+# =============================================================================
+# S-RegNET: Pial (GM) Surface Registration Configuration (HCP Young Adult)
+# =============================================================================
+# Custom configuration for training and evaluating S-RegNET on HCP Pial surfaces.
+# Canonical Template: HCP subject 100206 (repaired genus-0 pial surface mesh).
+# All paths owned by v_mahith_reddy.
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  train_txt: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_mahith_reddy/hcp_data/val.txt"
+
+  # Template subject seg & repaired pial mesh (built via prepare_hcp_template.py)
+  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/template_100206/template_pial_seg_onehot.npy"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/template_100206/template_pial_mesh_repaired.npz"
+
+  # File naming inside each subject directory (T1w subfolder)
+  seg_filename: "seg4_white_onehot.npy"
+  input_seg_filename: null   # null = GT-in/GT-out; set to synthseg_white_onehot_v1.npy for deployment
+
+  pairwise:
+    enabled: false
+    pairs_per_epoch: 300
+    template_prob: 0.25
+    target_pool_schedule: []
+    pool_seed: 0
+
+  white_sdf_filename: null
+  white_surf_filename: null
+  template_white_sdf_path: null
+  cortex_labels_dir: null
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/hcp_pial"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [128, 128, 128]   # (D, H, W)
+  num_classes: 5
+  seg_channels: 5
+  head: "default"                # standard SVF head
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: true
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 150
+  num_workers: 4
+  pin_memory: true
+
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+  warmup_epochs: 10
+
+  use_amp: true
+
+  save_every: 10
+  patience: 40
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+loss:
+  # Segmentation alignment
+  dice:          0.8
+  cross_entropy: 0.2
+  # Class weights: [0: BG, 1: Cortex (GM), 2: Other Brain, 3: WM Interior, 4: CSF]
+  # Weight on Cortex (Class 1) set to 5.0 to prioritize the outer pial boundary
+  class_weights: [0.1, 5.0, 1.0, 3.0, 1.0]
+
+  surface:       0.0
+  surface_tail:  0.0
+
+  mesh_edge:     0.0
+  mesh_lap:      0.0
+  mesh_normal:   0.0
+
+  # Geometric regularization (SVF & Diffeomorphic Integration)
+  bending:       0.02
+  jacobian:      0.15
+  displacement:  0.01
+
+  # Lambda-based adaptive regularization
+  lambda_smoothness: 0.05
+  lambda_prior:      0.05
+
+  # Affine regularization
+  affine_reg:    0.01
+  affine_ortho:  0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility & Device
+# -----------------------------------------------------------------------------
+seed: 42
+
+device:
+  gpu: "cuda:0"
+  cudnn_benchmark: true
+
+visualization:
+  num_samples: 10
+  detailed_samples: 5
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex (GM)"
+    - "Other Brain"
+    - "White Surface Interior"
+    - "CSF"
+
+resume:
+  checkpoint_path: null
+  weights_only: false
+
