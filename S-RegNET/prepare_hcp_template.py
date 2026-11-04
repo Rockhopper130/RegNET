@@ -66,12 +66,15 @@ def process_surface_pair(lh_path, rh_path, ref_img, out_npz_path, surf_name="sur
 
     if st0['si_faces'] > 0:
         print(f"  Repairing {surf_name} crossings to guarantee 0 self-intersections...")
-        repaired_verts, hist, rep = repair(
+        repaired_verts, hist = repair(
             all_verts, all_faces,
-            rings=2, lam=0.3, inner=5, max_iter=60
+            k=2, lam=0.3, inner=5, max_iter=60
         )
         st1, _ = detect(repaired_verts, all_faces)
+        d = np.linalg.norm(repaired_verts - all_verts, axis=1)
         print(f"  Repaired crossing faces: {st1['si_faces']:,} ({st1['si_faces_pct']:.4f}%)")
+        print(f"  Vertices moved: {int((d > 1e-6).sum()):,} ({(d > 1e-6).mean() * 100:.3f}%), "
+              f"max move: {float(d.max()):.4f} mm")
     else:
         print(f"  Mesh is already 100% clean (0 crossings)!")
         repaired_verts = all_verts
