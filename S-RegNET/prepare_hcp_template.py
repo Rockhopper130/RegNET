@@ -28,7 +28,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "utils"))
 
 from label_mapping import remap_to_5class
-from repair_template_mesh import repair, self_intersections
+from repair_template_mesh import detect, repair
 from visualize_mesh import world_to_norm
 
 
@@ -61,7 +61,7 @@ def process_surface_pair(lh_path, rh_path, ref_img, out_npz_path, surf_name="sur
     all_faces = np.concatenate([f_l, f_r + n_lh], axis=0)
 
     print(f"  Testing self-intersections on raw {surf_name} mesh...")
-    st0 = self_intersections(all_verts, all_faces)
+    st0, _ = detect(all_verts, all_faces)
     print(f"  Initial crossing faces: {st0['si_faces']:,} ({st0['si_faces_pct']:.4f}%)")
 
     if st0['si_faces'] > 0:
@@ -70,7 +70,7 @@ def process_surface_pair(lh_path, rh_path, ref_img, out_npz_path, surf_name="sur
             all_verts, all_faces,
             rings=2, lam=0.3, inner=5, max_iter=60
         )
-        st1 = self_intersections(repaired_verts, all_faces)
+        st1, _ = detect(repaired_verts, all_faces)
         print(f"  Repaired crossing faces: {st1['si_faces']:,} ({st1['si_faces_pct']:.4f}%)")
     else:
         print(f"  Mesh is already 100% clean (0 crossings)!")

@@ -52,7 +52,7 @@ from git_provenance import write_git_sha
 from inference import load_config
 from losses import compute_dice_score
 from model import SegRegistrationNet, SpatialTransformer, load_bandlimited_warm_start
-from repair_template_mesh import self_intersections
+from mesh_flip_probe import self_intersections
 from visualize_mesh import (
     integrate_svf,
     norm_to_world,
