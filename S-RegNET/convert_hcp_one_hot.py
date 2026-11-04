@@ -16,7 +16,7 @@ Writes to:
 Usage:
     python convert_hcp_one_hot.py \
         --hcp_root /shared/scratch/0/home/v_mahith_reddy/hcp_data \
-        --subjects_file /shared/scratch/0/home/v_mahith_reddy/subjects.txt \
+        --subjects_file /shared/scratch/0/home/v_mahith_reddy/hcp_data/val.txt \
         --workers 8
 """
 
@@ -30,7 +30,6 @@ import nibabel as nib
 import numpy as np
 from tqdm import tqdm
 
-# Add parent directory for utils
 _ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT))
 
@@ -56,7 +55,7 @@ def convert_single_subject(job):
     if not os.path.exists(in_path):
         return False, f"Missing {in_path}"
 
-    # If already converted and not corrupt, skip
+    # If already converted and valid, skip
     if os.path.exists(out_nii_path) and os.path.exists(out_npy_path):
         return True, "Already converted"
 
@@ -80,7 +79,7 @@ def convert_single_subject(job):
 def main():
     parser = argparse.ArgumentParser(description="Convert HCP aparc+aseg to 5-class one-hot")
     parser.add_argument("--hcp_root", required=True, help="Root directory holding HCP subject folders")
-    parser.add_argument("--subjects_file", required=True, help="Text file with subject IDs (one per line)")
+    parser.add_argument("--subjects_file", required=True, help="Text file with subject IDs or seg paths (one per line)")
     parser.add_argument("--seg_name", default="aparc+aseg.nii.gz")
     parser.add_argument("--out_seg_name", default="seg4_white.nii.gz")
     parser.add_argument("--out_npy_name", default="seg4_white_onehot.npy")
@@ -89,10 +88,20 @@ def main():
 
     hcp_root = Path(args.hcp_root)
     with open(args.subjects_file, "r") as f:
-        subjects = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
     jobs = []
-    for subj in subjects:
+    for line in lines:
+        if "/" in line or "\\" in line:
+            parts = Path(line).parts
+            if "T1w" in parts:
+                idx = parts.index("T1w")
+                subj = parts[idx - 1]
+            else:
+                subj = Path(line).name.split(".")[0]
+        else:
+            subj = line
+
         subj_dir = str(hcp_root / subj)
         jobs.append((subj_dir, args.seg_name, args.out_seg_name, args.out_npy_name))
 
@@ -106,4 +115,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
