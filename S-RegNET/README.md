@@ -8,6 +8,9 @@ upload. The template mesh is then carried through the inverse of that
 deformation into the subject's space. The output is the subject's white-matter
 surface with the template's topology. Everything runs on a 128³ grid (~2 mm).
 
+This README describes the OASIS/SynthSeg workflow. For HCP WM/GM data access
+and training on the cluster, see [HCP_DATASET.md](./HCP_DATASET.md).
+
 The shared model is **distilled net + 50 refinement steps**:
 
 1. One forward pass of the distilled network → a velocity field `v`.
