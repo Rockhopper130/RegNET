@@ -49,6 +49,7 @@ model:
   num_classes: 5
   seg_channels: 5
   head: "default"                # standard SVF head
+  activation_checkpointing: true # trade extra compute for lower training VRAM
 
 # -----------------------------------------------------------------------------
 # Affine Pre-alignment
@@ -115,7 +116,7 @@ loss:
 seed: 42
 
 device:
-  gpu: "cuda:0"
+  gpu: "cuda:6"
   cudnn_benchmark: true
 
 visualization:
@@ -132,4 +133,3 @@ visualization:
 resume:
   checkpoint_path: null
   weights_only: false
-

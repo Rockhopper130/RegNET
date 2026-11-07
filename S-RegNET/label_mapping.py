@@ -31,6 +31,10 @@ LABEL_MAPPING = {
     14: 4, 15: 4,
 }
 
+# FreeSurfer aparc+aseg stores cortical atlas parcels in these ranges. Exclude
+# 1000/2000 ("Unknown"), which are not cortical parcels.
+LABEL_MAPPING.update({label: 1 for label in (*range(1001, 1036), *range(2001, 2036))})
+
 # seg35.nii.gz holds the aseg structures sorted by FreeSurfer label and
 # renumbered 1..35 with 24 (CSF) dropped — 1..19 left+midline, 20..35 right.
 # Verified on OASIS_OAS1_0199_MR1: mirrored voxel counts, centroid laterality,

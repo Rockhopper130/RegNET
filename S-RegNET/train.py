@@ -138,6 +138,8 @@ class Config:
         # tied two-branch band-limited head (model.BandLimitedHead).
         self.head = cfg['model'].get('head', 'default')
         self.lowpass_size = cfg['model'].get('lowpass_size')
+        self.activation_checkpointing = cfg['model'].get(
+            'activation_checkpointing', False)
 
         # Affine
         affine_cfg = cfg.get('affine', {})
@@ -714,7 +716,10 @@ def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config,
         pbar.set_postfix({'loss': f'{loss.item():.4f}', 'dice': f'{dice_score:.4f}'})
 
     num_batches = len(dataloader)
-    avg_dice_per_class = [np.mean(scores) for scores in all_dice_per_class]
+    avg_dice_per_class = [
+        float(np.nanmean(scores)) if np.isfinite(scores).any() else float('nan')
+        for scores in all_dice_per_class
+    ]
 
     return {
         'loss': total_loss / num_batches,
@@ -859,6 +864,7 @@ def main():
         target_size=config.target_size,
         seg_channels=config.seg_channels, use_affine=config.use_affine,
         head=config.head, lowpass_size=config.lowpass_size,
+        activation_checkpointing=config.activation_checkpointing,
     ).to(device)
     stn = SpatialTransformer(size=config.target_size, device=device).to(device)
 
@@ -1007,7 +1013,10 @@ def main():
         )
 
         if epoch % 5 == 0:
-            dice_str = " | ".join([f"C{i}: {d:.4f}" for i, d in enumerate(val_metrics['dice_per_class'])])
+            dice_str = " | ".join(
+                f"C{i}: {d:.4f}" if np.isfinite(d) else f"C{i}: N/A"
+                for i, d in enumerate(val_metrics['dice_per_class'])
+            )
             logger.info(f"  Per-class Dice: {dice_str}")
 
         is_best = val_metrics['dice'] > best_dice

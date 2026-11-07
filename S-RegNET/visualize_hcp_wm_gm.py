@@ -98,7 +98,7 @@ def render_ortho_slices(bg_vol, seg_vol,
     """
     D, H, W = bg_vol.shape
     centers = [D // 2, H // 2, W // 2]
-    axis_names = ['Axial (Z)', 'Coronal (Y)', 'Sagittal (X)']
+    views = [(2, 'Axial (Z)'), (1, 'Coronal (Y)'), (0, 'Sagittal (X)')]
 
     fig = plt.figure(figsize=(18, 11), facecolor='#111111')
     gs = fig.add_gridspec(2, 3, height_ratios=[1.2, 0.8], hspace=0.25, wspace=0.15)
@@ -109,8 +109,8 @@ def render_ortho_slices(bg_vol, seg_vol,
     c_gt_wm = '#00FF66'       # Spring Green
     c_gt_pial = '#FFE600'     # Bright Gold/Yellow
 
-    for axis in range(3):
-        ax = fig.add_subplot(gs[0, axis])
+    for panel, (axis, axis_name) in enumerate(views):
+        ax = fig.add_subplot(gs[0, panel])
         s = centers[axis]
 
         # Extract background slice
@@ -121,7 +121,9 @@ def render_ortho_slices(bg_vol, seg_vol,
         else:
             sl = bg_vol[:, :, s]
 
-        ax.imshow(sl, cmap='gray', origin='lower')
+        # Mesh slice coordinates are ordered by ascending volume axis, while
+        # imshow uses the last array axis for x and the penultimate for y.
+        ax.imshow(sl.T, cmap='gray', origin='lower')
 
         # Slice segments
         # 1. Predicted WM
@@ -150,7 +152,7 @@ def render_ortho_slices(bg_vol, seg_vol,
                 lc = LineCollection(seg_g_pial, colors=c_gt_pial, linewidths=1.0, linestyle='--', alpha=0.8)
                 ax.add_collection(lc)
 
-        ax.set_title(f"{axis_names[axis]} (Slice {s})", color='white', fontsize=13, pad=8)
+        ax.set_title(f"{axis_name} (Slice {s})", color='white', fontsize=13, pad=8)
         ax.axis('off')
 
     # Thickness analysis in bottom row
@@ -335,4 +337,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

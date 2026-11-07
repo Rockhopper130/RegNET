@@ -56,7 +56,7 @@ def to_one_hot_fast(seg, num_classes=5):
 
 
 def convert_single_subject(job):
-    subj_dir, seg_name, out_seg_name, out_npy_name = job
+    subj_dir, seg_name, out_seg_name, out_npy_name, overwrite = job
     in_path = os.path.join(subj_dir, "T1w", seg_name)
     out_nii_path = os.path.join(subj_dir, "T1w", out_seg_name)
     out_npy_path = os.path.join(subj_dir, "T1w", out_npy_name)
@@ -65,7 +65,7 @@ def convert_single_subject(job):
         return False, f"Missing {in_path}"
 
     # If already converted and valid, skip
-    if os.path.exists(out_nii_path) and os.path.exists(out_npy_path):
+    if not overwrite and os.path.exists(out_nii_path) and os.path.exists(out_npy_path):
         return True, "Already converted"
 
     try:
@@ -93,6 +93,10 @@ def main():
     parser.add_argument("--out_seg_name", default="seg4_white.nii.gz")
     parser.add_argument("--out_npy_name", default="seg4_white_onehot.npy")
     parser.add_argument("--workers", type=int, default=16, help="Number of parallel workers")
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="Reconvert subjects even when both output files already exist",
+    )
     args = parser.parse_args()
 
     hcp_root = Path(args.hcp_root)
@@ -112,7 +116,10 @@ def main():
             subj = line
 
         subj_dir = str(hcp_root / subj)
-        jobs.append((subj_dir, args.seg_name, args.out_seg_name, args.out_npy_name))
+        jobs.append((
+            subj_dir, args.seg_name, args.out_seg_name, args.out_npy_name,
+            args.overwrite,
+        ))
 
     print(f"Converting {len(jobs)} subjects to 5-class one-hot format using {args.workers} workers...")
     with Pool(args.workers) as pool:

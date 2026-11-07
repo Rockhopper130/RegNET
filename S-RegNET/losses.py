@@ -571,7 +571,14 @@ def compute_dice_score(y_pred, y_true, num_classes=5, epsilon=1e-5):
         inter = 2 * (pred_c * true_c).sum(dim=vol_axes)
         union = pred_c.sum(dim=vol_axes) + true_c.sum(dim=vol_axes)
         dice = (inter + epsilon) / (union + epsilon)
-        dice_per_class.append(dice.mean().item())
+        present = union > 0
+        dice_per_class.append(
+            dice[present].mean().item() if present.any() else float('nan')
+        )
 
-    fg_mean = sum(dice_per_class[1:]) / (num_classes - 1) if num_classes > 1 else dice_per_class[0]
+    fg_dice = [score for score in dice_per_class[1:] if math.isfinite(score)]
+    fg_mean = (
+        sum(fg_dice) / len(fg_dice)
+        if fg_dice else float('nan')
+    ) if num_classes > 1 else dice_per_class[0]
     return dice_per_class, fg_mean

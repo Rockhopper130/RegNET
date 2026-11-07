@@ -93,6 +93,28 @@ def process_surface_pair(lh_path, rh_path, ref_img, out_npz_path, surf_name="sur
     return st0, st1
 
 
+def build_template_segmentation(hcp_subj_dir, out_dir):
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    ref_seg_path = Path(hcp_subj_dir) / "T1w" / "aparc+aseg.nii.gz"
+    if not ref_seg_path.exists():
+        raise FileNotFoundError(f"Reference segmentation {ref_seg_path} does not exist!")
+
+    ref_img = nib.load(str(ref_seg_path))
+    raw_seg = np.asanyarray(ref_img.dataobj).astype(np.int64)
+    seg5 = remap_to_5class(raw_seg)
+
+    template_seg_nii = out_path / "template_pial_seg.nii.gz"
+    template_seg_npy = out_path / "template_pial_seg_onehot.npy"
+    nib.save(
+        nib.Nifti1Image(seg5.astype(np.uint8), ref_img.affine, ref_img.header),
+        str(template_seg_nii),
+    )
+    np.save(str(template_seg_npy), to_one_hot(seg5))
+    print(f"  -> Saved template seg NIfTI: {template_seg_nii}")
+    print(f"  -> Saved template seg One-Hot: {template_seg_npy}")
+
+
 def build_template_dual_mesh(hcp_subj_dir, out_dir):
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -121,16 +143,7 @@ def build_template_dual_mesh(hcp_subj_dir, out_dir):
 
     # 3. Template Segmentation
     print("\nRemapping template aparc+aseg to 5-class one-hot segmentation...")
-    raw_seg = np.asanyarray(ref_img.dataobj).astype(np.int64)
-    seg5 = remap_to_5class(raw_seg)
-
-    template_seg_nii = out_path / "template_pial_seg.nii.gz"
-    template_seg_npy = out_path / "template_pial_seg_onehot.npy"
-
-    nib.save(nib.Nifti1Image(seg5.astype(np.uint8), ref_img.affine, ref_img.header), str(template_seg_nii))
-    np.save(str(template_seg_npy), to_one_hot(seg5))
-    print(f"  -> Saved template seg NIfTI: {template_seg_nii}")
-    print(f"  -> Saved template seg One-Hot: {template_seg_npy}")
+    build_template_segmentation(hcp_subj_dir, out_dir)
 
     report = {
         "subject": Path(hcp_subj_dir).name,
@@ -148,9 +161,16 @@ def main():
     parser = argparse.ArgumentParser(description="Build and repair HCP Dual Template Meshes (WM + Pial)")
     parser.add_argument("--hcp_dir", required=True, help="Path to HCP template subject dir (e.g. .../100206)")
     parser.add_argument("--out_dir", required=True, help="Output directory for repaired template meshes")
+    parser.add_argument(
+        "--seg_only", action="store_true",
+        help="Regenerate only the remapped template segmentation, leaving meshes untouched",
+    )
     args = parser.parse_args()
 
-    build_template_dual_mesh(args.hcp_dir, args.out_dir)
+    if args.seg_only:
+        build_template_segmentation(args.hcp_dir, args.out_dir)
+    else:
+        build_template_dual_mesh(args.hcp_dir, args.out_dir)
 
 
 if __name__ == "__main__":

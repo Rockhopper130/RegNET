@@ -24,6 +24,7 @@ The lambda head produces a per-voxel adaptive-smoothness weight
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 # =============================================================================
@@ -67,8 +68,9 @@ class AffineNet(nn.Module):
 
 class ConvBlock(nn.Module):
     """Conv → InstanceNorm → LeakyReLU, twice."""
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, activation_checkpointing=False):
         super().__init__()
+        self.activation_checkpointing = activation_checkpointing
         self.block = nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.InstanceNorm3d(out_channels),
@@ -79,6 +81,8 @@ class ConvBlock(nn.Module):
         )
 
     def forward(self, x):
+        if self.activation_checkpointing and self.training:
+            return checkpoint(self.block, x, use_reentrant=False)
         return self.block(x)
 
 
@@ -148,29 +152,29 @@ class UNet(nn.Module):
     6-channel (fw, rv) pair.
     """
     def __init__(self, in_channels=10, out_channels=6, head='default',
-                 lowpass_size=96):
+                 lowpass_size=96, activation_checkpointing=False):
         super().__init__()
         self.head = head
 
         # Encoder
-        self.enc1 = ConvBlock(in_channels, 32)
-        self.enc2 = ConvBlock(32, 64)
-        self.enc3 = ConvBlock(64, 128)
-        self.enc4 = ConvBlock(128, 256)
+        self.enc1 = ConvBlock(in_channels, 32, activation_checkpointing)
+        self.enc2 = ConvBlock(32, 64, activation_checkpointing)
+        self.enc3 = ConvBlock(64, 128, activation_checkpointing)
+        self.enc4 = ConvBlock(128, 256, activation_checkpointing)
         self.pool = nn.MaxPool3d(kernel_size=2, stride=2)
 
         # Bottleneck
-        self.bottleneck = ConvBlock(256, 512)
+        self.bottleneck = ConvBlock(256, 512, activation_checkpointing)
 
         # Decoder
         self.up4 = nn.ConvTranspose3d(512, 256, kernel_size=2, stride=2)
-        self.dec4 = ConvBlock(512, 256)
+        self.dec4 = ConvBlock(512, 256, activation_checkpointing)
         self.up3 = nn.ConvTranspose3d(256, 128, kernel_size=2, stride=2)
-        self.dec3 = ConvBlock(256, 128)
+        self.dec3 = ConvBlock(256, 128, activation_checkpointing)
         self.up2 = nn.ConvTranspose3d(128, 64, kernel_size=2, stride=2)
-        self.dec2 = ConvBlock(128, 64)
+        self.dec2 = ConvBlock(128, 64, activation_checkpointing)
         self.up1 = nn.ConvTranspose3d(64, 32, kernel_size=2, stride=2)
-        self.dec1 = ConvBlock(64, 32)
+        self.dec1 = ConvBlock(64, 32, activation_checkpointing)
 
         # Flow head — near-zero init so initial flow ≈ 0 → warp starts at identity.
         if head == 'bandlimited':
@@ -304,7 +308,8 @@ class SegRegistrationNet(nn.Module):
     rides on. The default 6-channel head predicts the two fields independently.
     """
     def __init__(self, target_size, seg_channels=5, use_affine=False,
-                 head='default', lowpass_size=None):
+                 head='default', lowpass_size=None,
+                 activation_checkpointing=False):
         super().__init__()
         self.use_affine = use_affine
         self.head = head
@@ -314,7 +319,8 @@ class SegRegistrationNet(nn.Module):
         # band limit = 3/4 of the grid unless set: 96 at 128³ (all existing
         # checkpoints), 144 at 192³ (white_r192_ft kept 96, model.lowpass_size)
         self.unet = UNet(in_channels=2 * seg_channels, out_channels=6, head=head,
-                          lowpass_size=lowpass_size or target_size[0] * 3 // 4)
+                          lowpass_size=lowpass_size or target_size[0] * 3 // 4,
+                          activation_checkpointing=activation_checkpointing)
         self.stn = SpatialTransformer(size=target_size)
 
     def forward(self, template_seg, sample_seg, return_velocity=False):
@@ -381,6 +387,5 @@ def load_bandlimited_warm_start(model, state_dict):
         raise RuntimeError(
             f"band-limited warm start: unexpected checkpoint layout — "
             f"missing {missing}, unexpected {unexpected}")
-
 
 
