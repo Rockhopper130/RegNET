@@ -1,0 +1,189 @@
+# =============================================================================
+# S-RegNET: HCP Young Adult Fine-Tune Config
+# =============================================================================
+# Two-stage training plan for HCP pial + WM:
+#
+#   Stage 1 (this file, run 1): scratch Dice/CE training on HCP segs, 150
+#   epochs, to get a solid baseline diffeomorphic registration on HCP anatomy.
+#
+#   Stage 2 (config_hcp_mesh_ft.yaml, run 2): warm-start from Stage 1's
+#   best_model.pth and add pial SDF + mesh regularizers for topological
+#   cleanup — same recipe as config_meshsup.yaml did for OASIS WM.
+#
+# Key changes vs config_hcp_pial.yaml:
+#   - head: "bandlimited"  (tied SVF — the exact inverse exp(-v) is what the
+#     mesh push uses; without it the reverse flow is an approximation and mesh
+#     topology is not guaranteed)
+#   - jacobian weight raised 0.0 -> 0.3 to actively suppress fold voxels
+#     (the HCP is higher-res anatomy with tighter gyri; more folds expected)
+#   - class_weights rebalanced: GM up (harder class), CSF reduced (borders
+#     on pial but is not the target surface; over-weighting it hurts GM Dice)
+#   - bending raised 0.02 -> 0.05 for smoother fields on the complex pial
+#   - displacement set 0.0 -> 0.005 (soft anchor; the pial needs to slide
+#     but completely unconstrained displacement drifts off in early training)
+#   - activation_checkpointing: true  (HCP ~256^3 native; 128^3 fits but tight)
+#   - 150 epochs / patience 50 / save_every 10
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  train_txt: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_mahith_reddy/hcp_data/val.txt"
+
+  # Template subject (100206), repaired pial+WM meshes built by prepare_hcp_template.py
+  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/template_100206/template_pial_seg_onehot.npy"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/template_100206/template_pial_mesh_repaired.npz"
+
+  # GT supervision seg (5-class one-hot with class 3 = white-surface interior)
+  seg_filename: "seg4_white_onehot.npy"
+  # Network input: null = same as seg_filename (GT-in/GT-out). Switch to
+  # "synthseg_white_onehot_v1.npy" for the deployment condition.
+  input_seg_filename: null
+
+  pairwise:
+    enabled: false
+    pairs_per_epoch: 300
+    template_prob: 0.25
+    target_pool_schedule: []
+    pool_seed: 0
+
+  # Surface supervision OFF in Stage 1 — purely Dice/CE + regularization.
+  # Stage 2 (config_hcp_mesh_ft.yaml) turns these on.
+  white_sdf_filename: null
+  white_surf_filename: null
+  template_white_sdf_path: null
+  cortex_labels_dir: null
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/hcp_ft_stage1"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [128, 128, 128]   # (D, H, W)
+  num_classes: 5
+  seg_channels: 5
+
+  # bandlimited head: tied SVF, exact inverse by construction.
+  # This is REQUIRED for topology-safe mesh push (exp(-v) inverts exp(+v)).
+  head: "bandlimited"
+  # lowpass_size defaults to 3/4 of target (96 at 128^3) — keep default.
+
+  # Trade compute for VRAM: needed for 128^3 on typical CMU GPU allocation.
+  activation_checkpointing: true
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: true
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 150
+  num_workers: 4
+  pin_memory: true
+
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+  warmup_epochs: 10
+
+  use_amp: true
+
+  save_every: 10
+  patience: 50
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+loss:
+  # Segmentation alignment
+  dice:          1.0     # slightly higher than OASIS baseline (0.8) to drive
+                          # harder GM/CSF classes on HCP's tighter gyri
+  cross_entropy: 0.2
+
+  # Class weights: [BG, Cortex(GM), OtherBrain, WM-Interior, CSF]
+  #   GM (1):  8.0  — the primary target; under-represented relative to WM
+  #   WM (3):  3.0  — well-represented but still important
+  #   CSF (4): 0.5  — borders pial surface; over-weighting it confuses the
+  #                   model (CSF and GM share the pial boundary voxels)
+  #   Other (2): 1.0, BG (0): 0.1 (background dominates volume; keep low)
+  class_weights: [0.1, 8.0, 1.0, 3.0, 0.5]
+
+  # Boundary-restricted GM Dice — focuses the loss on the thin pial boundary
+  # strip (dilated 2 voxels around the GT GM channel). This is an ADD-ON to
+  # global Dice, not a replacement. Weight 0.3: meaningful enough to drive
+  # boundary accuracy without overwhelming the global alignment.
+  boundary_dice: 0.3
+
+  # Surface distance + mesh terms OFF in Stage 1 (SDF files not prepared yet)
+  surface:       0.0
+  surface_tail:  0.0
+  mesh_edge:     0.0
+  mesh_lap:      0.0
+  mesh_normal:   0.0
+
+  # Geometric regularization
+  # bending: raised vs original HCP config (0.02 -> 0.05): HCP pial is a
+  #   highly convoluted surface; a smoother field prevents the mesh from
+  #   developing spurious local kinks along gyral walls.
+  bending:       0.05
+
+  # jacobian: raised to 0.3 (from 0.0 in the HCP pial config).
+  #   The bandlimited head on a 128^3 grid has a much smaller raw Jacobian
+  #   scale than the 6-ch default head (see config_meshsup notes: 0.005 there
+  #   to avoid swamping dice). Here we start fresh without distillation, so
+  #   0.3 matches the OASIS config.yaml's intent and the topK+pre-fold
+  #   formulation keeps it in the right range.
+  jacobian:      0.3
+
+  # displacement: small anchor against wild unconstrained drifts in
+  #   early epochs; pial needs freedom to slide, so keep it small.
+  displacement:  0.005
+
+  # Lambda-based adaptive regularization (unchanged from OASIS baseline)
+  lambda_smoothness: 0.05
+  lambda_prior:      0.05
+
+  # Affine regularization
+  affine_reg:    0.01
+  affine_ortho:  0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility & Device
+# -----------------------------------------------------------------------------
+seed: 42
+
+device:
+  gpu: "cuda:0"
+  cudnn_benchmark: true
+
+visualization:
+  num_samples: 10
+  detailed_samples: 5
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex (GM)"
+    - "Other Brain"
+    - "White Surface Interior"
+    - "CSF"
+
+resume:
+  checkpoint_path: null
+  weights_only: false

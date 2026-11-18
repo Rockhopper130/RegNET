@@ -1,0 +1,178 @@
+# =============================================================================
+# S-RegNET: HCP Young Adult Mesh Fine-Tune (Stage 2)
+# =============================================================================
+# Warm-starts from config_hcp_ft.yaml's best_model.pth and adds:
+#   - Pial SDF surface supervision (symmetric: template->subject + subject->template)
+#   - Three mesh regularizers (edge / Laplacian / normal dihedral) on the
+#     pushed pial template mesh, penalizing distortion in EXCESS of the
+#     affine-aligned template's own curvature.
+#
+# This mirrors exactly what config_meshsup.yaml did for OASIS WM, adapted
+# to the HCP pial topology.
+#
+# Prerequisites (run before this):
+#   1. config_hcp_ft.yaml  (Stage 1 Dice/CE run, produces best_model.pth)
+#   2. utils/make_white_sdf.py run on every HCP subject producing:
+#        <subj>/T1w/pial_sdf_v1.npy     (pial SDF, float16, native grid, mm)
+#        <subj>/T1w/pial_surf_v1.npz    (pial verts_norm + n_lh)
+#   3. The template pial SDF precomputed via make_white_sdf.py on subject 100206
+#
+# See HCP_DATASET.md for the exact make_white_sdf.py invocation.
+#
+# Run:
+#   CUDA_VISIBLE_DEVICES=<n> python train.py --config config_hcp_mesh_ft.yaml
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  train_txt: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_mahith_reddy/hcp_data/val.txt"
+
+  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/template_100206/template_pial_seg_onehot.npy"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/template_100206/template_pial_mesh_repaired.npz"
+
+  seg_filename: "seg4_white_onehot.npy"
+  input_seg_filename: null
+
+  pairwise:
+    enabled: false
+    pairs_per_epoch: 300
+    template_prob: 0.25
+    target_pool_schedule: []
+    pool_seed: 0
+
+  # Pial SDF + surface vertices for each HCP subject.
+  # Written by: python utils/make_white_sdf.py --surf_type pial ...
+  # (see HCP_DATASET.md for invocation).
+  white_sdf_filename: "pial_sdf_v1.npy"
+  white_surf_filename: "pial_surf_v1.npz"
+
+  # Template (100206) pial SDF for the subject->template direction.
+  template_white_sdf_path: "/shared/scratch/0/home/v_mahith_reddy/hcp_data/template_100206/pial_sdf_template.npy"
+
+  # Medial-wall mask (fsaverage ico7, lh+rh). The pial cuts through the
+  # medial wall — an artificial boundary, not anatomy — so drop it from scoring.
+  cortex_labels_dir: "/shared/scratch/0/home/v_mahith_reddy/bandlimit_opt/fsaverage_labels"
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/hcp_ft_stage2"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [128, 128, 128]
+  num_classes: 5
+  seg_channels: 5
+  head: "bandlimited"           # must match Stage 1 checkpoint
+  activation_checkpointing: true
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: true
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 40
+  num_workers: 4
+  pin_memory: true
+
+  # Conservative LR: warm-starting a converged net onto new surface losses
+  learning_rate: 5.0e-5
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+  warmup_epochs: 3
+
+  use_amp: true
+
+  save_every: 5
+  # patience = num_epochs: surface/mesh terms trade Dice, so early stopping
+  # on Dice alone would stop too soon. Watch val surface instead.
+  patience: 40
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+loss:
+  # Keep the Stage 1 Dice/CE weights — they anchor the registration objective
+  dice:          1.0
+  cross_entropy: 0.2
+  class_weights: [0.1, 8.0, 1.0, 3.0, 0.5]
+  boundary_dice: 0.3
+
+  # Pial surface distance — symmetric (template->subject + subject->template).
+  # Calibrated at 0.2x the initial weighted Dice (~1.0 at warm start = 0.2).
+  # surface_tail is 0.15x of surface to emphasize the worst-5% vertices
+  # without dominating, matching config_meshsup's 0.03/0.2 = 15% ratio.
+  surface:       0.2
+  surface_tail:  0.03
+
+  # Mesh regularizers on the full pushed pial template mesh.
+  # Weights calibrated relative to the initial mesh term magnitudes at the
+  # warm-start checkpoint, aiming each term ~20% of the Dice/CE data term:
+  #   mesh_edge@0 ~ 0.1  -> weight = 2.0  (log-ratio^2 term)
+  #   mesh_lap@0  ~ 0.05 mm -> weight = 4.0
+  #   mesh_normal@0 ~ 0.03 -> weight = 7.0
+  # These are estimates — monitor loss_components.jsonl after epoch 1 and
+  # adjust if mesh terms dominate (> 50% of total) or vanish (< 5%).
+  mesh_edge:     2.0
+  mesh_lap:      4.0
+  mesh_normal:   7.0
+
+  # Geometric regularization — keep Stage 1 values
+  bending:       0.05
+  jacobian:      0.3
+  # displacement OFF: surface terms ask the mesh to slide; penalizing that
+  # displacement fights the surface objective.
+  displacement:  0.0
+
+  lambda_smoothness: 0.05
+  lambda_prior:      0.05
+
+  affine_reg:    0.01
+  affine_ortho:  0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility & Device
+# -----------------------------------------------------------------------------
+seed: 42
+
+device:
+  gpu: "cuda:0"
+  cudnn_benchmark: true
+
+visualization:
+  num_samples: 10
+  detailed_samples: 5
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex (GM)"
+    - "Other Brain"
+    - "White Surface Interior"
+    - "CSF"
+
+# -----------------------------------------------------------------------------
+# Resume from Stage 1
+# -----------------------------------------------------------------------------
+resume:
+  # UPDATE THIS PATH to your Stage 1 best_model.pth before running.
+  checkpoint_path: "/shared/scratch/0/home/v_mahith_reddy/training_results/hcp_ft_stage1/<TIMESTAMP>/checkpoints/best_model.pth"
+  # weights_only: load model weights only (fresh optimizer, epoch 1, best Dice reset).
+  # Stage 2 adds 5 new loss terms — the old Adam moments are meaningless.
+  weights_only: true

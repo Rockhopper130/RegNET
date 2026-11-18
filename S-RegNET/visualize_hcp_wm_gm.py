@@ -91,10 +91,15 @@ def render_ortho_slices(bg_vol, seg_vol,
                         pred_wm_vox, pred_pial_vox, wm_faces, pial_faces,
                         gt_wm_vox=None, gt_pial_vox=None,
                         gt_wm_faces=None, gt_pial_faces=None,
+                        pred_wm_world_mm=None, pred_pial_world_mm=None,
+                        gt_wm_world_mm=None, gt_pial_world_mm=None,
                         save_path=None, title=""):
     """
     Renders 3 orthogonal slices displaying both White Matter and Pial contours,
     plus cortical thickness comparisons.
+
+    pred/gt_*_world_mm: (N, 3) vertices in mm (world coordinates). Used for
+    thickness computation; if None falls back to scaled voxel approximation.
     """
     D, H, W = bg_vol.shape
     centers = [D // 2, H // 2, W // 2]
@@ -159,19 +164,35 @@ def render_ortho_slices(bg_vol, seg_vol,
     ax_hist = fig.add_subplot(gs[1, :2])
     ax_hist.set_facecolor('#1e1e1e')
 
-    # Compute vertex-wise cortical thickness (distance from pial to nearest WM vertex)
-    tree_wm = cKDTree(pred_wm_vox)
-    pred_thickness, _ = tree_wm.query(pred_pial_vox)
-    # Convert voxels to approximate mm (0.7 mm native voxels for HCP)
-    pred_thickness_mm = pred_thickness * 0.7
+    # Cortical thickness: nearest-neighbor distance from each pial vertex to
+    # the WM surface, computed in WORLD COORDINATES (mm).
+    # pred_wm_vox and pred_pial_vox are in target_size voxel space; we need
+    # world-space mm for meaningful thickness. These are passed as world
+    # coordinates from the caller, so we use them directly if available,
+    # otherwise fall back to the voxel-space approximation with a warning.
+    if pred_pial_world_mm is not None and pred_wm_world_mm is not None:
+        tree_wm = cKDTree(pred_wm_world_mm)
+        pred_thickness_mm, _ = tree_wm.query(pred_pial_world_mm)
+    else:
+        # Fallback: voxel-space approximation with HCP native voxel size 0.7 mm.
+        # This underestimates thickness when target_size < native resolution.
+        tree_wm = cKDTree(pred_wm_vox)
+        pred_thickness_mm_vox, _ = tree_wm.query(pred_pial_vox)
+        # Scale: native voxels are 0.7 mm; target_size/native_size ratio corrects
+        # for the downsampling done by F.interpolate at load time.
+        pred_thickness_mm = pred_thickness_mm_vox * 0.7
 
     ax_hist.hist(pred_thickness_mm, bins=60, range=(0.5, 6.0), color=c_pred_pial, alpha=0.7,
                  label=f'Predicted Thickness (Mean: {np.mean(pred_thickness_mm):.2f} mm)')
 
     if gt_wm_vox is not None and gt_pial_vox is not None:
-        tree_gt_wm = cKDTree(gt_wm_vox)
-        gt_thickness, _ = tree_gt_wm.query(gt_pial_vox)
-        gt_thickness_mm = gt_thickness * 0.7
+        if gt_wm_world_mm is not None and gt_pial_world_mm is not None:
+            tree_gt_wm = cKDTree(gt_wm_world_mm)
+            gt_thickness_mm, _ = tree_gt_wm.query(gt_pial_world_mm)
+        else:
+            tree_gt_wm = cKDTree(gt_wm_vox)
+            gt_thickness_vox, _ = tree_gt_wm.query(gt_pial_vox)
+            gt_thickness_mm = gt_thickness_vox * 0.7
         ax_hist.hist(gt_thickness_mm, bins=60, range=(0.5, 6.0), color=c_gt_pial, alpha=0.4,
                      label=f'Ground Truth FreeSurfer (Mean: {np.mean(gt_thickness_mm):.2f} mm)')
 
@@ -280,12 +301,16 @@ def main():
             res = model(tpl_seg_resized, subj_seg_resized, return_velocity=True)
             flow_fw, flow_rv, lambda_map, affine_mat, vel_fw = res
 
-            # Push Pial mesh
+            # Push Pial mesh — returns (verts_norm, verts_world_mm)
             _, pred_pial_world = push_mesh(pial_verts_norm, affine_mat, vel_fw, stn, ref_img)
             # Push WM mesh
             _, pred_wm_world = push_mesh(wm_verts_norm, affine_mat, vel_fw, stn, ref_img)
 
-        # Convert to voxel coordinates for slicing
+        # World coordinates in mm — used for accurate thickness computation
+        pred_pial_world_mm = pred_pial_world.astype(np.float64)
+        pred_wm_world_mm   = pred_wm_world.astype(np.float64)
+
+        # Voxel coordinates for orthogonal slice rendering
         pred_pial_vox = norm_to_vox(world_to_norm(pred_pial_world, ref_img), target_size[0])
         pred_wm_vox = norm_to_vox(world_to_norm(pred_wm_world, ref_img), target_size[0])
 
@@ -297,6 +322,7 @@ def main():
 
         gt_pial_vox, gt_pial_faces = None, None
         gt_wm_vox, gt_wm_faces = None, None
+        gt_pial_world_mm, gt_wm_world_mm = None, None
 
         if gt_lh_pial and gt_rh_pial and gt_lh_wm and gt_rh_wm:
             v_lp, f_lp = load_gii_mesh(gt_lh_pial)
@@ -304,12 +330,14 @@ def main():
             gt_pial_w = np.concatenate([v_lp, v_rp], axis=0)
             gt_pial_faces = np.concatenate([f_lp, f_rp + len(v_lp)], axis=0)
             gt_pial_vox = norm_to_vox(world_to_norm(gt_pial_w, ref_img), target_size[0])
+            gt_pial_world_mm = gt_pial_w.astype(np.float64)
 
             v_lw, f_lw = load_gii_mesh(gt_lh_wm)
             v_rw, f_rw = load_gii_mesh(gt_rh_wm)
             gt_wm_w = np.concatenate([v_lw, v_rw], axis=0)
             gt_wm_faces = np.concatenate([f_lw, f_rw + len(v_lw)], axis=0)
             gt_wm_vox = norm_to_vox(world_to_norm(gt_wm_w, ref_img), target_size[0])
+            gt_wm_world_mm = gt_wm_w.astype(np.float64)
 
         # Background volume: use Class 1 (Cortex) + Class 3 (WM) as anatomical backdrop
         bg_vol = (subj_seg[1] * 0.5 + subj_seg[3] * 1.0)
@@ -330,6 +358,10 @@ def main():
             gt_pial_vox=gt_pial_vox,
             gt_wm_faces=gt_wm_faces,
             gt_pial_faces=gt_pial_faces,
+            pred_wm_world_mm=pred_wm_world_mm,
+            pred_pial_world_mm=pred_pial_world_mm,
+            gt_wm_world_mm=gt_wm_world_mm,
+            gt_pial_world_mm=gt_pial_world_mm,
             save_path=str(fig_path),
             title=f"Subject {subj}"
         )

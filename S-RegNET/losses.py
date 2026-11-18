@@ -91,6 +91,52 @@ def cross_entropy_loss(y_pred, y_true, class_weights=None):
     return F.cross_entropy(y_pred, y_true.argmax(dim=1), weight=class_weights)
 
 
+def boundary_dice_loss(y_pred, y_true, gm_class=1, dilate=2, smooth=1e-5):
+    """
+    Dice loss restricted to the dilated boundary zone of the GM (pial) class.
+
+    Motivation: Global Dice is dominated by well-matched interior voxels.
+    The pial surface lives in a thin boundary strip (1-3 voxels wide at 128^3).
+    Over-smoothing makes the interior match well while the boundary drifts —
+    exactly the pattern seen in the HCP results (mean GM Dice 0.76 but
+    HD95 1.71 mm and high self-intersections).
+
+    By computing Dice only inside the dilated boundary of the GT GM channel,
+    this term forces the model to care about the precise boundary location.
+    It is an ADD-ON term, not a replacement for global Dice.
+
+    Args:
+        y_pred: (B, C, D, H, W) soft predicted one-hot.
+        y_true: (B, C, D, H, W) hard one-hot target.
+        gm_class: index of the GM / pial class (default 1).
+        dilate: half-width of the boundary dilation (voxels).
+        smooth: numerical stability.
+
+    Returns:
+        Scalar boundary Dice loss (1 - boundary Dice score).
+    """
+    # Compute dilated boundary mask of GT GM
+    gm_gt = y_true[:, gm_class:gm_class+1]          # (B, 1, D, H, W)
+    k = 2 * dilate + 1
+    # max-pool dilates the foreground; subtract to get the boundary strip
+    dilated = F.max_pool3d(gm_gt.float(), kernel_size=k, stride=1, padding=dilate)
+    eroded  = -F.max_pool3d(-gm_gt.float(), kernel_size=k, stride=1, padding=dilate)
+    boundary_mask = (dilated - eroded).clamp(0, 1)   # 1 in the boundary strip
+
+    pred_gm = y_pred[:, gm_class:gm_class+1]
+    true_gm = y_true[:, gm_class:gm_class+1].float()
+
+    # Restrict to boundary voxels
+    pred_b = pred_gm * boundary_mask
+    true_b = true_gm * boundary_mask
+
+    vol_axes = [2, 3, 4]
+    inter = (pred_b * true_b).sum(dim=vol_axes)
+    union = pred_b.sum(dim=vol_axes) + true_b.sum(dim=vol_axes)
+    dice = (2. * inter + smooth) / (union + smooth)
+    return (1 - dice).mean()
+
+
 # =============================================================================
 # Geometric Regularization Losses
 # =============================================================================
@@ -151,10 +197,16 @@ def jacobian_det_loss(flow):
     - Linear ReLU on negatives: mean pressure across all folded voxels.
     - Top-K linear hard-example mining: bypasses the volume-mean
       dilution (1/N over millions of voxels) that makes neg.mean()
-      contribute negligible per-voxel gradient. K = 0.1% of voxels;
-      neg clamped to ≤10 to bound a single catastrophic outlier.
+      contribute negligible per-voxel gradient. K = 0.1% of voxels.
     - Pre-fold barrier: pulls det away from 0 while still positive,
       so the warp doesn't drift into folding in the first place.
+      Threshold raised 0.05 -> 0.10: the bandlimited head emits smoother
+      fields, so near-zero determinants appear more often as the net learns
+      sharp pial boundaries; a tighter barrier catches them earlier.
+    - Log-barrier term: -log(det_norm + eps) on strictly positive voxels.
+      Provides an infinite gradient cost as det -> 0^+, complementing the
+      quadratic pre-fold barrier which saturates near zero. Only active
+      where det_norm > 0 (not on actual folds, where the linear term fires).
     """
     det = jacobian_det(flow)
 
@@ -169,13 +221,18 @@ def jacobian_det_loss(flow):
     topk_neg, _ = torch.topk(neg.flatten(), k)
     neg_topk = topk_neg.sum()
 
-    # Relaxed pre-fold barrier threshold to 0.05 to allow sharper localized deformations
-    # Penalizes voxels before they even reach 0 (fold)
-    near_zero = F.relu(0.05 - det_norm) * (det_norm > 0).float()
+    # Pre-fold quadratic barrier: threshold raised 0.05 -> 0.10 for the
+    # bandlimited head (tighter gyri, more near-zero determinants)
+    near_zero = F.relu(0.10 - det_norm) * (det_norm > 0).float()
     pre_fold = (near_zero ** 2).mean()
 
-    # Heavy penalty heavily targets the worst 0.1% voxels (actual mesh flips), moderate on pre_fold
-    return neg_linear + 2.0 * neg_topk + 0.1 * pre_fold
+    # Soft log-barrier on positive determinants: pushes the median det away
+    # from the folding threshold without saturating. Clamp det_norm at 1e-3
+    # to avoid -inf at the fold boundary (the linear term handles true folds).
+    pos_mask = (det_norm > 1e-3).float()
+    log_barrier = -(torch.log(det_norm.clamp_min(1e-3)) * pos_mask).mean()
+
+    return neg_linear + 2.0 * neg_topk + 0.1 * pre_fold + 0.05 * log_barrier
 
 
 def displacement_loss(flow):
@@ -451,6 +508,7 @@ class SegRegistrationLoss(nn.Module):
 
     Terms (all summed with weights from `weights`):
       - dice, cross_entropy (symmetric)
+      - boundary_dice  (boundary-only GM Dice; active when weight > 0)
       - bending, jacobian, displacement (symmetric)
       - lambda_smoothness, lambda_prior
       - vel_mse      (active only when pred_vel and target_vel are not None)
@@ -493,6 +551,17 @@ class SegRegistrationLoss(nn.Module):
         # Segmentation alignment (symmetric)
         loss_dict['dice'] = dice_loss(warped_seg_fw, sample_seg, class_weights=self.class_weights) + dice_loss(warped_seg_rv, template_seg, class_weights=self.class_weights)
         loss_dict['cross_entropy'] = cross_entropy_loss(warped_seg_fw, sample_seg, class_weights=self.class_weights) + cross_entropy_loss(warped_seg_rv, template_seg, class_weights=self.class_weights)
+
+        # Boundary-restricted GM Dice (active only when weight > 0 in config).
+        # Computed on the forward direction only (template->subject) since that
+        # is the deliverable direction; the reverse adds noise for the boundary
+        # term because the reverse target is the template itself (less folded).
+        bw = self.weights.get('boundary_dice', 0.0)
+        if bw > 0.0:
+            loss_dict['boundary_dice'] = boundary_dice_loss(
+                warped_seg_fw, sample_seg, gm_class=1, dilate=2)
+        else:
+            loss_dict['boundary_dice'] = torch.tensor(0.0, device=flow_fw.device)
 
         # Geometric regularization (symmetric)
         loss_dict['bending'] = bending_energy_loss(flow_fw) + bending_energy_loss(flow_rv)
