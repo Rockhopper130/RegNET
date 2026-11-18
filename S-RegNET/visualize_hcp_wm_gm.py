@@ -51,6 +51,7 @@ sys.path.insert(0, str(_ROOT / "utils"))
 from git_provenance import write_git_sha
 from inference import load_config
 from model import SegRegistrationNet, SpatialTransformer
+from repair_template_mesh import repair
 from visualize_mesh import (
     integrate_svf,
     norm_to_vox,
@@ -235,6 +236,7 @@ def main():
     parser.add_argument("--subjects", nargs="+", required=True, help="Subject IDs to visualize")
     parser.add_argument("--output_dir", default="viz_output_wm_gm", help="Output directory")
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--postprocess", action="store_true", help="Apply Laplacian post-processing repair to eliminate self-intersections")
     args = parser.parse_args()
 
     dev = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -309,6 +311,14 @@ def main():
         # World coordinates in mm — used for accurate thickness computation
         pred_pial_world_mm = pred_pial_world.astype(np.float64)
         pred_wm_world_mm   = pred_wm_world.astype(np.float64)
+
+        if args.postprocess:
+            print(f"  [Post-processing] Repairing pial mesh self-intersections...")
+            pred_pial_world_mm, _ = repair(pred_pial_world_mm, pial_faces, k=2, lam=0.3, inner=5, max_iter=60)
+            print(f"  [Post-processing] Repairing WM mesh self-intersections...")
+            pred_wm_world_mm, _ = repair(pred_wm_world_mm, wm_faces, k=2, lam=0.3, inner=5, max_iter=60)
+            pred_pial_world = pred_pial_world_mm.astype(np.float32)
+            pred_wm_world = pred_wm_world_mm.astype(np.float32)
 
         # Voxel coordinates for orthogonal slice rendering
         pred_pial_vox = norm_to_vox(world_to_norm(pred_pial_world, ref_img), target_size[0])

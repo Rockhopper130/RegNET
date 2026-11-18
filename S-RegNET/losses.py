@@ -155,29 +155,28 @@ def jacobian_det(flow):
 
     flow is (B, 3, D, H, W) with channel order (x, y, z) matching the
     SpatialTransformer's id_grid = stack((xx, yy, zz)) — i.e. channel 0
-    varies along the W axis, channel 1 along H, channel 2 along D. We
-    build warped_grid = id_grid + flow and take per-voxel-step finite
-    differences along each spatial axis. Because id_grid already steps
-    by (2/W, 2/H, 2/D) per voxel, the identity term and per-axis units
-    fall out automatically — det's sign reflects true invertibility.
+    varies along the W axis, channel 1 along H, channel 2 along D.
+
+    Memory-optimized: avoids constructing a full (1, 3, D, H, W) identity grid
+    and warped grid. Since id_grid is purely linear with voxel spacing
+    (2/W, 2/H, 2/D), its finite differences are constant diagonals.
+    We compute flow differences directly and add the constant diagonals,
+    saving ~100MB of temporary GPU allocations per call and avoiding OOM.
     """
     B, _, D, H, W = flow.shape
 
-    lin_z = (2 * torch.arange(D, device=flow.device, dtype=flow.dtype) + 1) / D - 1
-    lin_y = (2 * torch.arange(H, device=flow.device, dtype=flow.dtype) + 1) / H - 1
-    lin_x = (2 * torch.arange(W, device=flow.device, dtype=flow.dtype) + 1) / W - 1
-    zz, yy, xx = torch.meshgrid(lin_z, lin_y, lin_x, indexing='ij')
-    id_grid = torch.stack((xx, yy, zz), dim=0).unsqueeze(0)
+    # Forward differences on flow:
+    # dW_d is diff along D (dim 2), dW_h along H (dim 3), dW_w along W (dim 4)
+    dW_d = F.pad(flow[:, :, 1:, :, :] - flow[:, :, :-1, :, :], (0, 0, 0, 0, 0, 1))
+    dW_h = F.pad(flow[:, :, :, 1:, :] - flow[:, :, :, :-1, :], (0, 0, 0, 1, 0, 0))
+    dW_w = F.pad(flow[:, :, :, :, 1:] - flow[:, :, :, :, :-1], (0, 1, 0, 0, 0, 0))
 
-    warped = id_grid + flow
-
-    dW_d = warped[:, :, 1:, :, :] - warped[:, :, :-1, :, :]
-    dW_h = warped[:, :, :, 1:, :] - warped[:, :, :, :-1, :]
-    dW_w = warped[:, :, :, :, 1:] - warped[:, :, :, :, :-1]
-
-    dW_d = F.pad(dW_d, (0, 0, 0, 0, 0, 1))
-    dW_h = F.pad(dW_h, (0, 0, 0, 1, 0, 0))
-    dW_w = F.pad(dW_w, (0, 1, 0, 0, 0, 0))
+    # Add the identity grid's constant step to the diagonal components:
+    # channel 0 is x (varies along W), channel 1 is y (varies along H), channel 2 is z (varies along D)
+    # The valid region before padding extends to -1 on each axis:
+    dW_w[:, 0, :, :, :-1] += 2.0 / W
+    dW_h[:, 1, :, :-1, :] += 2.0 / H
+    dW_d[:, 2, :-1, :, :] += 2.0 / D
 
     a, b, c = dW_w[:, 0], dW_h[:, 0], dW_d[:, 0]
     d, e, f = dW_w[:, 1], dW_h[:, 1], dW_d[:, 1]
@@ -227,10 +226,9 @@ def jacobian_det_loss(flow):
     pre_fold = (near_zero ** 2).mean()
 
     # Soft log-barrier on positive determinants: pushes the median det away
-    # from the folding threshold without saturating. Clamp det_norm at 1e-3
-    # to avoid -inf at the fold boundary (the linear term handles true folds).
-    pos_mask = (det_norm > 1e-3).float()
-    log_barrier = -(torch.log(det_norm.clamp_min(1e-3)) * pos_mask).mean()
+    # from the folding threshold without saturating.
+    pos_det = det_norm[det_norm > 1e-3]
+    log_barrier = -torch.log(pos_det).mean() if pos_det.numel() > 0 else torch.tensor(0.0, device=flow.device)
 
     return neg_linear + 2.0 * neg_topk + 0.1 * pre_fold + 0.05 * log_barrier
 

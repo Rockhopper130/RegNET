@@ -53,6 +53,7 @@ from inference import load_config
 from losses import compute_dice_score
 from model import SegRegistrationNet, SpatialTransformer, load_bandlimited_warm_start
 from mesh_flip_probe import self_intersections
+from repair_template_mesh import repair
 from visualize_mesh import (
     integrate_svf,
     norm_to_world,
@@ -123,6 +124,7 @@ def main():
     parser.add_argument("--output_dir", default="zero_shot_results", help="Directory to save evaluation results")
     parser.add_argument("--device", default="cuda:0", help="Torch device")
     parser.add_argument("--self_int", action="store_true", help="Calculate self-intersection percentage (slow)")
+    parser.add_argument("--postprocess", action="store_true", help="Apply Laplacian post-processing repair to eliminate self-intersections")
     args = parser.parse_args()
 
     dev = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -198,6 +200,10 @@ def main():
 
             # 2. Push Template Pial Mesh using exact inverse SVF
             pushed_verts_w = push_pial_mesh(tpl_verts_norm, affine_mat, vel_fw, stn, ref_img)
+
+        # Optional: Topological Post-processing repair (smooths crossing patches, moves vertices only)
+        if args.postprocess:
+            pushed_verts_w, _ = repair(pushed_verts_w, tpl_faces, k=2, lam=0.3, inner=5, max_iter=60)
 
         # 3. Load Ground Truth Pial Meshes (LH + RH)
         gt_v_l, _ = load_gii_mesh(lh_gt_path)
