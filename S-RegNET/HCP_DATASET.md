@@ -144,3 +144,53 @@ python3 train.py --config "$HCP_ROOT/config_hcp_pial_local.yaml"
 Check `output.base_dir` for the run's checkpoints, logs, and visualizations.
 The source config is kept unchanged, so your account-specific paths stay out
 of version control.
+
+## 4. Evaluate and visualize a trained HCP model
+
+The evaluation config must match the checkpoint's input resolution. For the
+96³ Stage 1 checkpoint, make a private 96³ copy and choose one validation
+subject for an initial smoke test:
+
+```bash
+RUN_DIR=/shared/scratch/0/home/v_mahith_reddy/training_results/hcp_ft_stage1/<run_timestamp>
+OUT_DIR="$RUN_DIR/validation_preview"
+mkdir -p "$OUT_DIR"
+cp config_hcp_ft.yaml "$OUT_DIR/config_hcp_ft_96.yaml"
+sed -i 's/target_size: \[128, 128, 128\]/target_size: [96, 96, 96]/' \
+  "$OUT_DIR/config_hcp_ft_96.yaml"
+SUBJECT=$(awk -F/ 'NR == 1 {print $(NF-2)}' "$HCP_ROOT/val.txt")
+DEVICE=cuda:0  # use the CUDA-visible index assigned to your job
+```
+
+Run the HCP metrics evaluator. It reports per-class Dice and voxel-surface
+HD95, plus raw pial and white mesh vertex HD95, self-intersecting-face
+percentage, and triangle-flip percentage. It writes one CSV and JSON row:
+
+```bash
+python3 utils/evaluate_hcp_metrics.py \
+  --checkpoint "$RUN_DIR/checkpoints/best_model.pth" \
+  --config "$OUT_DIR/config_hcp_ft_96.yaml" \
+  --template_dir "$HCP_ROOT/template_100206" \
+  --hcp_root "$HCP_ROOT" \
+  --subject "$SUBJECT" \
+  --output_dir "$OUT_DIR/metrics" \
+  --device "$DEVICE"
+```
+
+Generate paired WM/pial slice visualizations for the same subject:
+
+```bash
+python3 visualize_hcp_wm_gm.py \
+  --checkpoint "$RUN_DIR/checkpoints/best_model.pth" \
+  --config "$OUT_DIR/config_hcp_ft_96.yaml" \
+  --template_dir "$HCP_ROOT/template_100206" \
+  --hcp_root "$HCP_ROOT" \
+  --subjects "$SUBJECT" \
+  --output_dir "$OUT_DIR/visualizations" \
+  --device "$DEVICE"
+```
+
+The evaluator measures meshes before Laplacian repair; the visualizer also
+shows the un-repaired prediction unless `--postprocess` is explicitly passed.
+The visualization output is a PNG overlay, while the metrics are stored in the
+CSV/JSON files.

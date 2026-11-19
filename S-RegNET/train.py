@@ -42,7 +42,12 @@ plus per-voxel folding diagnostics via the Jacobian determinant.
 Usage:
     python train.py                    # use default config.yaml
     python train.py --config my.yaml   # use a custom config
+    python train.py --device cuda:5    # override the configured device
+    python train.py --config config_hcp_ft.yaml --resolution 96
 """
+
+import os
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 import torch.nn.functional as F
@@ -50,8 +55,6 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 import numpy as np
 import nibabel as nib
-import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import sys
 import json
 import logging
@@ -743,9 +746,42 @@ def main():
     parser = argparse.ArgumentParser(description='Seg-only Registration Training')
     parser.add_argument('--config', type=str, default=None,
                         help='Path to config.yaml (default: config.yaml in script directory)')
+    parser.add_argument('--device', type=str, default=None,
+                        help='Override the configured device (e.g. cuda:5 or cpu)')
+    parser.add_argument('--resolution', type=int, default=None,
+                        help='Override cubic training resolution (multiple of 16, e.g. 96)')
     args = parser.parse_args()
 
     config = Config(args.config)
+    if args.resolution is not None:
+        if args.resolution < 32 or args.resolution % 16 != 0:
+            raise ValueError("--resolution must be at least 32 and divisible by 16")
+        if len(set(config.target_size)) != 1:
+            raise ValueError("--resolution requires a cubic configured target_size")
+        old_resolution = config.target_size[0]
+        if config.lowpass_size is not None:
+            config.lowpass_size = max(
+                1, round(config.lowpass_size * args.resolution / old_resolution)
+            )
+        config.target_size = (args.resolution,) * 3
+    if args.device is not None:
+        requested_device = torch.device(args.device)
+        if requested_device.type == 'cuda':
+            if not torch.cuda.is_available():
+                raise RuntimeError("--device requests CUDA, but CUDA is unavailable")
+            device_index = (torch.cuda.current_device()
+                            if requested_device.index is None
+                            else requested_device.index)
+            if not 0 <= device_index < torch.cuda.device_count():
+                raise ValueError(
+                    f"CUDA device index {device_index} is not visible; "
+                    f"visible device count is {torch.cuda.device_count()}"
+                )
+            config.device = f"cuda:{device_index}"
+        elif requested_device.type == 'cpu':
+            config.device = 'cpu'
+        else:
+            raise ValueError("--device must be a CUDA device or cpu")
 
     # Reproducibility
     torch.manual_seed(config.seed)
@@ -764,13 +800,19 @@ def main():
     logger.info("=" * 70)
     logger.info(f"Output directory: {config.output_dir}")
     logger.info(f"Device: {config.device}")
+    logger.info(f"Training resolution: {config.target_size}")
 
     write_git_sha(config.output_dir, logger)
     config.save(os.path.join(config.output_dir, "config.json"))
 
     device = torch.device(config.device)
     if 'cuda' in config.device:
-        logger.info(f"GPU: {torch.cuda.get_device_name()}")
+        logger.info(f"GPU: {torch.cuda.get_device_name(device)}")
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+        logger.info(
+            f"GPU memory free: {free_bytes / 2**30:.1f} GiB / "
+            f"{total_bytes / 2**30:.1f} GiB"
+        )
 
     # ==========================================================================
     # Data Loading

@@ -52,6 +52,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 # =============================================================================
@@ -186,6 +187,61 @@ def jacobian_det(flow):
     return det
 
 
+def _jacobian_det_chunk_stats(flow_chunk, full_depth, output_depth, k):
+    """Return Jacobian-loss sums and top-k candidates for one depth slab."""
+    _, _, _, H, W = flow_chunk.shape
+    flow = flow_chunk[:, :, :output_depth]
+
+    dW_d = flow.new_zeros(flow.shape)
+    valid_depth = (
+        output_depth if flow_chunk.shape[2] > output_depth else output_depth - 1
+    )
+    if valid_depth > 0:
+        dW_d[:, :, :valid_depth] = (
+            flow_chunk[:, :, 1:valid_depth + 1]
+            - flow_chunk[:, :, :valid_depth]
+        )
+        dW_d[:, 2, :valid_depth] += 2.0 / full_depth
+
+    dW_h = F.pad(
+        flow[:, :, :, 1:, :] - flow[:, :, :, :-1, :],
+        (0, 0, 0, 1, 0, 0),
+    )
+    dW_w = F.pad(
+        flow[:, :, :, :, 1:] - flow[:, :, :, :, :-1],
+        (0, 1, 0, 0, 0, 0),
+    )
+    dW_h[:, 1, :, :-1, :] += 2.0 / H
+    dW_w[:, 0, :, :, :-1] += 2.0 / W
+
+    a, b, c = dW_w[:, 0], dW_h[:, 0], dW_d[:, 0]
+    d, e, f = dW_w[:, 1], dW_h[:, 1], dW_d[:, 1]
+    g, h, i = dW_w[:, 2], dW_h[:, 2], dW_d[:, 2]
+    det_norm = (
+        a * (e * i - f * h)
+        - b * (d * i - f * g)
+        + c * (d * h - e * g)
+    ) / ((2.0 / full_depth) * (2.0 / H) * (2.0 / W))
+
+    neg = F.relu(-det_norm)
+    near_zero = F.relu(0.10 - det_norm) * (det_norm > 0).to(det_norm.dtype)
+    positive = det_norm > 1e-3
+    log_sum = -torch.where(
+        positive, torch.log(det_norm.clamp_min(1e-3)), 0.0
+    ).sum(dtype=torch.float32)
+    topk = torch.topk(neg.flatten(), min(k, neg.numel())).values
+    if topk.numel() < k:
+        topk = F.pad(topk, (0, k - topk.numel()))
+
+    return (
+        neg.sum(dtype=torch.float32),
+        topk,
+        (near_zero ** 2).sum(dtype=torch.float32),
+        log_sum,
+        positive.sum(dtype=torch.float32),
+    )
+
+
 def jacobian_det_loss(flow):
     """
     Anti-folding penalty on the Jacobian determinant of the warp.
@@ -206,29 +262,53 @@ def jacobian_det_loss(flow):
       Provides an infinite gradient cost as det -> 0^+, complementing the
       quadratic pre-fold barrier which saturates near zero. Only active
       where det_norm > 0 (not on actual folds, where the linear term fires).
+    - Evaluated in depth slabs with checkpointing to limit peak memory; the
+      top-K term is merged across slabs so its objective is unchanged.
     """
-    det = jacobian_det(flow)
+    B, _, D, H, W = flow.shape
+    total_voxels = B * D * H * W
+    k = max(1, int(0.001 * total_voxels))
+    chunk_depth = min(16, D)
 
-    _, _, D, H, W = flow.shape
-    ref = (2.0 / D) * (2.0 / H) * (2.0 / W)
-    det_norm = det / ref
+    neg_sum = torch.zeros((), device=flow.device, dtype=torch.float32)
+    near_zero_sum = torch.zeros((), device=flow.device, dtype=torch.float32)
+    log_sum = torch.zeros((), device=flow.device, dtype=torch.float32)
+    positive_count = torch.zeros((), device=flow.device, dtype=torch.float32)
+    topk_chunks = []
 
-    neg = F.relu(-det_norm)
-    neg_linear = neg.mean()
+    for start in range(0, D, chunk_depth):
+        stop = min(start + chunk_depth, D)
+        output_depth = stop - start
+        # Include the next depth plane where available to compute forward
+        # differences at the end of this slab without materializing full-volume
+        # Jacobian intermediates.
+        input_stop = min(stop + 1, D)
+        flow_chunk = flow[:, :, start:input_stop]
+        stats_fn = lambda chunk, depth=D, slab_depth=output_depth, topk=k: (
+            _jacobian_det_chunk_stats(chunk, depth, slab_depth, topk)
+        )
+        if torch.is_grad_enabled() and flow_chunk.requires_grad:
+            stats = checkpoint(stats_fn, flow_chunk, use_reentrant=False)
+        else:
+            stats = stats_fn(flow_chunk)
 
-    k = max(1, int(0.001 * neg.numel()))
-    topk_neg, _ = torch.topk(neg.flatten(), k)
-    neg_topk = topk_neg.sum()
+        (
+            chunk_neg_sum,
+            chunk_topk,
+            chunk_near_zero_sum,
+            chunk_log_sum,
+            chunk_positive_count,
+        ) = stats
+        neg_sum = neg_sum + chunk_neg_sum
+        near_zero_sum = near_zero_sum + chunk_near_zero_sum
+        log_sum = log_sum + chunk_log_sum
+        positive_count = positive_count + chunk_positive_count
+        topk_chunks.append(chunk_topk)
 
-    # Pre-fold quadratic barrier: threshold raised 0.05 -> 0.10 for the
-    # bandlimited head (tighter gyri, more near-zero determinants)
-    near_zero = F.relu(0.10 - det_norm) * (det_norm > 0).float()
-    pre_fold = (near_zero ** 2).mean()
-
-    # Soft log-barrier on positive determinants: pushes the median det away
-    # from the folding threshold without saturating.
-    pos_det = det_norm[det_norm > 1e-3]
-    log_barrier = -torch.log(pos_det).mean() if pos_det.numel() > 0 else torch.tensor(0.0, device=flow.device)
+    neg_topk = torch.topk(torch.cat(topk_chunks), k).values.float().sum()
+    neg_linear = neg_sum / total_voxels
+    pre_fold = near_zero_sum / total_voxels
+    log_barrier = log_sum / positive_count.clamp_min(1)
 
     return neg_linear + 2.0 * neg_topk + 0.1 * pre_fold + 0.05 * log_barrier
 
@@ -384,6 +464,44 @@ def mesh_regularizers(v_pushed, v_ref, m):
 # meaningful target instead of a degenerate constant.
 
 
+def _iter_dilated_boundary(sample_seg, dilate=2, chunk_depth=8):
+    """Yield dilated boundary slabs without full-volume difference tensors."""
+    batch_size, _, depth, height, width = sample_seg.shape
+    halo = dilate
+    kernel_size = 2 * dilate + 1
+
+    for start in range(0, depth, chunk_depth):
+        stop = min(start + chunk_depth, depth)
+        source_start = max(0, start - halo)
+        source_stop = min(depth, stop + halo)
+        seg = sample_seg[:, :, source_start:source_stop]
+        slab_depth = source_stop - source_start
+        boundary = torch.zeros(
+            (batch_size, 1, slab_depth, height, width),
+            dtype=torch.bool,
+            device=sample_seg.device,
+        )
+
+        z_stop = min(source_stop, depth - 1)
+        if z_stop > source_start:
+            boundary[:, :, :z_stop - source_start] |= (
+                sample_seg[:, :, source_start + 1:z_stop + 1]
+                != sample_seg[:, :, source_start:z_stop]
+            ).any(dim=1, keepdim=True)
+        boundary[:, :, :, :-1, :] |= (
+            seg[:, :, :, 1:, :] != seg[:, :, :, :-1, :]
+        ).any(dim=1, keepdim=True)
+        boundary[:, :, :, :, :-1] |= (
+            seg[:, :, :, :, 1:] != seg[:, :, :, :, :-1]
+        ).any(dim=1, keepdim=True)
+
+        dilated = F.max_pool3d(
+            boundary.float(), kernel_size=kernel_size, stride=1, padding=dilate
+        )
+        offset = start - source_start
+        yield start, dilated[:, :, offset:offset + stop - start]
+
+
 def _dilated_boundary(sample_seg, dilate=2):
     """Binary boundary of a one-hot seg, dilated by `dilate` voxels (3D max-pool).
 
@@ -395,20 +513,51 @@ def _dilated_boundary(sample_seg, dilate=2):
         (B, 1, D, H, W) float in {0, 1}. 1 = within `dilate` voxels of any
         inter-class transition; 0 = strict interior.
 
-    Implementation: per-axis |Δseg| summed across channels gives a non-zero
-    value exactly at class transitions (one-hot → one channel goes +1, another
-    −1, abs catches both). max_pool3d with kernel 2·dilate+1 dilates.
+    Work is split into depth slabs so intermediate tensors stay small.
     """
-    dz = (sample_seg[:, :, 1:, :, :] - sample_seg[:, :, :-1, :, :]).abs()
-    dy = (sample_seg[:, :, :, 1:, :] - sample_seg[:, :, :, :-1, :]).abs()
-    dx = (sample_seg[:, :, :, :, 1:] - sample_seg[:, :, :, :, :-1]).abs()
-    dz = F.pad(dz, (0, 0, 0, 0, 0, 1))
-    dy = F.pad(dy, (0, 0, 0, 1, 0, 0))
-    dx = F.pad(dx, (0, 1, 0, 0, 0, 0))
-    grad = (dz + dy + dx).sum(dim=1, keepdim=True)
-    boundary = (grad > 0).float()
-    k = 2 * dilate + 1
-    return F.max_pool3d(boundary, kernel_size=k, stride=1, padding=dilate)
+    boundary = torch.empty(
+        (sample_seg.shape[0], 1, *sample_seg.shape[2:]),
+        dtype=torch.float32,
+        device=sample_seg.device,
+    )
+    for start, slab in _iter_dilated_boundary(sample_seg, dilate=dilate):
+        boundary[:, :, start:start + slab.shape[2]] = slab
+    return boundary
+
+
+class _ChunkedLambdaPrior(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, lambda_map, sample_seg, std_val, dilate):
+        ctx.save_for_backward(lambda_map, sample_seg)
+        ctx.std_val = std_val
+        ctx.dilate = dilate
+
+        squared_error_sum = torch.zeros(
+            (), dtype=torch.float32, device=lambda_map.device
+        )
+        for start, boundary in _iter_dilated_boundary(sample_seg, dilate=dilate):
+            target = 1.0 - boundary
+            diff = lambda_map[:, :, start:start + boundary.shape[2]].float() - target
+            squared_error_sum.add_(diff.square().sum())
+        return squared_error_sum / (
+            2.0 * std_val ** 2 * lambda_map.numel()
+        )
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        lambda_map, sample_seg = ctx.saved_tensors
+        grad_lambda = torch.empty_like(lambda_map)
+        scale = grad_output.float() / (
+            ctx.std_val ** 2 * lambda_map.numel()
+        )
+
+        for start, boundary in _iter_dilated_boundary(
+                sample_seg, dilate=ctx.dilate):
+            stop = start + boundary.shape[2]
+            target = 1.0 - boundary
+            diff = lambda_map[:, :, start:stop].float() - target
+            grad_lambda[:, :, start:stop] = (diff * scale).to(lambda_map.dtype)
+        return grad_lambda, None, None, None
 
 
 def lambda_weighted_smoothness(flow, lambda_map):
@@ -457,9 +606,7 @@ def lambda_prior_loss(lambda_map, sample_seg, std_val=0.3, dilate=2):
     1/(2σ²) drops 50 → 5.5, so with config weight 0.05 the prior is a soft
     guide (eff ≈ 0.28) rather than the dominant force it was (eff ≈ 2.5).
     """
-    with torch.no_grad():
-        target = 1.0 - _dilated_boundary(sample_seg, dilate=dilate)
-    return torch.mean((lambda_map - target) ** 2 / (2 * std_val ** 2))
+    return _ChunkedLambdaPrior.apply(lambda_map, sample_seg, std_val, dilate)
 
 
 # =============================================================================

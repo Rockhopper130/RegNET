@@ -220,7 +220,7 @@ def main():
         # Optional: Self-intersections
         si_pct = None
         if args.self_int:
-            si_res = self_intersections(pushed_verts_w, tpl_faces)
+            si_res, _ = self_intersections(pushed_verts_w, tpl_faces)
             si_pct = si_res["si_faces_pct"]
 
         row = {
@@ -269,4 +269,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

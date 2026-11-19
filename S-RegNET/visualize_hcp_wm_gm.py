@@ -253,6 +253,8 @@ def main():
         target_size=target_size,
         seg_channels=cfg.get("model", {}).get("seg_channels", 5),
         use_affine=use_affine,
+        head=cfg.get("model", {}).get("head", "default"),
+        lowpass_size=cfg.get("model", {}).get("lowpass_size"),
     ).to(dev)
 
     ckpt = torch.load(args.checkpoint, map_location=dev, weights_only=False)

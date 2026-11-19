@@ -36,8 +36,10 @@ Elsewhere: `pip install torch numpy scipy nibabel matplotlib pyyaml tqdm scikit-
 (scikit-image only for the topology tools).
 
 `config.yaml` is the single source of truth (paths, sizes, loss weights).
-Edit it; there are no training CLI flags. Diagnostic scripts take
-`--checkpoint/--model`, `--config`, `--output_dir`, `--device`.
+Training also accepts `--config` and `--device` overrides. Diagnostic scripts
+take `--checkpoint/--model`, `--config`, `--output_dir`, `--device`. Training
+also accepts `--resolution N` to override a cubic input size at runtime; N must
+be at least 32 and divisible by 16. The chosen size is saved in the run config.
 
 Rules that will save you a day:
 
@@ -46,7 +48,14 @@ Rules that will save you a day:
   home breaks git and the file sync.
 - **Commit before a real run.** Every script stamps `GIT_SHA.txt` into its
   output dir and flags a dirty tree. A dirty run cannot be reproduced.
-- `nvidia-smi` first; the box is shared. Pass `--device cuda:N` explicitly.
+- `nvidia-smi` first; the box is shared. Pass `--device cuda:N` explicitly,
+  choosing an index with enough free memory. `N` is the CUDA-visible index;
+  with `CUDA_VISIBLE_DEVICES=5`, for example, that GPU is addressed as `cuda:0`.
+- The default training config enables activation checkpointing to reduce VRAM
+  use (at the cost of extra compute). This can help on busy GPUs, but cannot
+  reclaim memory used by other users; if it still OOMs, wait for more headroom
+  or pass a lower `--resolution` (for example, `--resolution 96`). Lower
+  resolution reduces spatial detail; use the same saved config for evaluation.
 
 ## 2. Data
 
@@ -149,7 +158,7 @@ Three stages, one GPU each. Stage A is ~1–2 days, B ~8 h, C ~5 h.
 supervision, affine on, 6-channel head, 200 epochs):
 
 ```bash
-python train.py                        # -> output.base_dir/<YYYYMMDD_HHMMSS>/{checkpoints,logs}
+python train.py --device cuda:N        # replace N with a GPU index with free memory
 ```
 
 Watch `logs/`: val Dice, `folding_pct`, per-term `loss_components.jsonl`.
@@ -169,7 +178,7 @@ extra loss term (`vel_mse`). `resume.checkpoint_path` in the config names the
 stage-A checkpoint; the affine branch is frozen automatically.
 
 ```bash
-python train.py --config bandlimit_opt/config_distill.yaml
+python train.py --config bandlimit_opt/config_distill.yaml --device cuda:N
 ```
 
 Every deviation from `config.yaml` is commented inside `config_distill.yaml`.

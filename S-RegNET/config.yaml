@@ -13,11 +13,11 @@ data:
   # Training and validation data lists (text files; one path per line, each
   # pointing at the seg .npy of one subject — the dataset loader infers the
   # subject directory from the file path).
-  train_txt: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/train.txt"
-  val_txt:   "/shared/scratch/0/home/v_mahith_reddy/oasis_data/val.txt"
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
 
   # Template subject seg (used as moving image for every registration).
-  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
 
   # Template WM mesh, REPAIRED. FreeSurfer's own 0406 ?h.white self-intersects in
   # 660 faces / 0.1007% / 47 patches before any warp — about a fifth of the ~0.53%
@@ -25,7 +25,7 @@ data:
   # to zero crossings by moving vertices only (faces untouched, so V-E+F and the
   # genus are unchanged); 1,950 verts moved, median 0.16 mm, 72% of it tangential.
   # Comment this out to fall back to the raw /meshes/ sibling, which is defective.
-  template_wm_mesh_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
 
   # File naming inside each subject directory.
   #   seg_filename       — the SUPERVISION TARGET. Every loss term scores against
@@ -84,6 +84,7 @@ model:
   target_size: [128, 128, 128]   # (D, H, W) — volume dims after resize
   num_classes: 5                 # incl. background (channel 0)
   seg_channels: 5
+  activation_checkpointing: true # trade extra compute for lower training VRAM
 
 # -----------------------------------------------------------------------------
 # Affine Pre-alignment
